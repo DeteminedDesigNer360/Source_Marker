@@ -1,0 +1,8 @@
+# 保持"克隆下来 == 被验证过的包"：对所有文件关闭行尾转换。
+#
+# 为什么需要它：Windows 上 git 默认 core.autocrlf=true，会把文本文件的 LF 换成 CRLF。
+# 那会让 mpv-player/校验.ps1（按 16 个文件的 SHA256 自检）在克隆件上误报失败 ——
+# 实测：修复前克隆件的自检在 licenses/Copyright.txt 等文件上就不一致。
+#
+# * -text = 不做任何转换，检入与检出都按原始字节处理。
+* -text
