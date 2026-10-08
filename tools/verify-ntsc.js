@@ -8,7 +8,8 @@
  *   ② 落点合理：JSON 的 time 与请求的 seek 目标相差 ≤ 1.5 帧
  *      （mpv 的 exact seek 会落在 ≥ 目标的第一帧上，最多差一帧）。
  *
- * 用法： node tools/verify-ntsc.js <ntsc.csv> <ntsc.json> <mode:ms|ff>
+ * 用法： node tools/verify-ntsc.js [csv] [json] [ms|ff] [用例文件]
+ *        不带参数即用 tools/verify-data/ 里的 NTSC 实测数据；请求点从用例文件的 seek 行读出
  */
 'use strict';
 
@@ -16,11 +17,26 @@ const fs = require('fs');
 const path = require('path');
 const { loadParser } = require('./pr-parser.js');
 
-const CSV = process.argv[2];
-const JSON_FILE = process.argv[3];
 const MODE = (process.argv[4] || 'ff').toLowerCase();
+const DEFAULT_DIR = path.join(__dirname, 'verify-data');
+const CSV = process.argv[2] || path.join(DEFAULT_DIR, MODE === 'ms' ? 'ntsc_long.ms.csv' : 'ntsc_long.csv');
+const JSON_FILE = process.argv[3] || path.join(DEFAULT_DIR, MODE === 'ms' ? 'ntsc_long.ms.json' : 'ntsc_long.json');
+const CASE = process.argv[5] || path.join(DEFAULT_DIR, 'ntsc_long.case.txt');
 const FPS = 30000 / 1001;
-const REQUESTED = [60.0, 115.0];
+// 请求点从用例文件的 seek 行读出来 —— 这样换素材只需换数据，不用改代码。
+// （原来写死 [60.0, 115.0]，对应的那份实测数据已不存在，工具等于跑不起来。）
+const REQUESTED = (function () {
+  try {
+    var lines = fs.readFileSync(CASE, 'utf8').split(/\r?\n/);
+    var out = [];
+    for (var i = 0; i < lines.length; i++) {
+      var m = lines[i].trim().match(/^seek\s+([0-9.]+)/i);
+      if (m) { out.push(parseFloat(m[1])); }
+    }
+    if (out.length) { return out; }
+  } catch (e) {}
+  return [60.0, 115.0];
+})();
 const HALF_FRAME = 0.5 / FPS;
 const SEEK_TOL = 1.5 / FPS;
 

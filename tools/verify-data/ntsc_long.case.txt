@@ -1,0 +1,16 @@
+# 长片 NTSC：验证 auto（HH:MM:SS:FF）在 29.97 下的漂移
+pause yes
+seek 300
+sleep 0.9
+msg add 第300秒
+sleep 0.6
+seek 599
+sleep 0.9
+msg add 第599秒
+sleep 0.6
+prop time-pos
+fps
+msg export %OUT%\ntsc_long_%TAG%.csv
+sleep 1.0
+msg dump
+quit

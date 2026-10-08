@@ -6,3 +6,9 @@ Thumbs.db
 desktop.ini
 .DS_Store
 *.tmp
+
+# fetch-mpv.py 的下载暂存目录（约 80 MB+，不入库）
+_pkg/
+
+# workspace 分支的工作克隆与其副本（它们自己就是 git 仓库，不入库）
+_branch-work*/

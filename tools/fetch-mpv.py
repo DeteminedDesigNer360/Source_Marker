@@ -1,7 +1,7 @@
 """下载并解压官方 mpv Windows 便携版（仅写入工作区，不碰系统）。
 
 用法： python tools/fetch-mpv.py
-产物： player-plugin/_pkg/mpv/  （内含 mpv.exe / mpv.com）
+产物： _pkg/mpv/  （内含 mpv.exe / mpv.com；要换进包里之前，先跑 collect-mpv-provenance.py 验证仍是 GPL 构建）
 """
 import json
 import os
@@ -11,7 +11,7 @@ import urllib.request
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PKG = os.path.join(ROOT, "player-plugin", "_pkg")
+PKG = os.path.join(ROOT, "_pkg")
 ZIP = os.path.join(PKG, "mpv-win64.zip")
 OUT = os.path.join(PKG, "mpv")
 API = "https://api.github.com/repos/mpv-player/mpv/releases/latest"

@@ -20,8 +20,8 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_EXE = os.path.join(ROOT, "player-plugin", "_pkg", "mpv", "mpv.exe")
-DEFAULT_OUT = os.path.join(ROOT, "licenses", "build-config.txt")
+DEFAULT_EXE = os.path.join(ROOT, "source-marker-united-1.1.0", "mpv-player", "mpv.exe")
+DEFAULT_OUT = os.path.join(ROOT, "source-marker-united-1.1.0", "mpv-player", "licenses", "build-config.txt")
 
 # 预期在 GPL 构建里出现的证据（任一缺失就说明构建性质变了）
 EXPECT_GPL = ["-Dgpl=true", "-Dffmpeg:gpl=enabled"]

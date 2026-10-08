@@ -1,7 +1,7 @@
 /*
  * verify-import.js —— 用 Pr 扩展「真实的解析函数」校验标记文件（读取方契约）
  *
- * 做法：从 extension/client/main.js 里切出解析段（时间解析 → 状态刷新 之间的代码），
+ * 做法：从包内 pr-extension/完整版/extension/client/main.js 里切出解析段（时间解析 → 状态刷新 之间的代码），
  * 在 vm 沙箱里求值，直接调用生产代码的 parseMarkerFile() / buildImportPayload()。
  * 不依赖 Premiere、不依赖浏览器。
  *
@@ -12,7 +12,7 @@
 const path = require('path');
 const { loadParser } = require('./pr-parser.js');
 
-const MAIN_JS = path.join(__dirname, '..', 'extension', 'client', 'main.js');
+const MAIN_JS = path.join(__dirname, '..', 'source-marker-united-1.1.0', 'pr-extension', '完整版', 'extension', 'client', 'main.js');
 const parser = loadParser(MAIN_JS);
 const parseMarkerFile = parser.parseMarkerFile;
 const secondsToTimecode = parser.secondsToTimecode;
