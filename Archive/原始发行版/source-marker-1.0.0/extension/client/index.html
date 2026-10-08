@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<title>Source Marker</title>
+<script src="./CSInterface.js"></script>
+<style>
+  :root { --bg:#232323; --panel:#2d2d2d; --line:#3c3c3c; --fg:#d8d8d8; --dim:#8a8a8a; --accent:#4a9eff; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:10px; background:var(--bg); color:var(--fg);
+         font:12px/1.6 "Segoe UI","Microsoft YaHei",sans-serif; }
+  h1 { font-size:13px; margin:0 0 8px; font-weight:600; letter-spacing:.3px; color:#fff; }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:9px; margin-bottom:8px; }
+  section > h2 { font-size:12px; margin:0 0 7px; color:#fff; font-weight:600; }
+  .row { display:flex; gap:6px; align-items:center; margin-bottom:6px; }
+  .row:last-child { margin-bottom:0; }
+  label { color:var(--dim); white-space:nowrap; }
+  input[type=text], input[type=number], select {
+    flex:1; min-width:0; background:#1c1c1c; color:var(--fg);
+    border:1px solid var(--line); border-radius:3px; padding:4px 6px; font:inherit;
+  }
+  input.tc { flex:0 0 92px; font-family:Consolas,monospace; }
+  input.num { flex:0 0 46px; }
+  button { background:#3a3a3a; color:var(--fg); border:1px solid var(--line);
+           border-radius:3px; padding:5px 10px; font:inherit; cursor:pointer; white-space:nowrap; }
+  button:hover { background:#454545; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#08121c; font-weight:600; }
+  button.primary:hover { background:#67b0ff; }
+  button.mini { padding:3px 8px; font-size:11px; }
+  #clipName { font-weight:600; color:#fff; word-break:break-all; }
+  #clipPath { color:var(--dim); font-size:11px; word-break:break-all; margin-bottom:3px; }
+  #tcLine { font-family:Consolas,monospace; color:var(--accent); }
+  .preview { flex:1; color:var(--dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #namePreview { color:#ffd479; font-family:Consolas,monospace; }
+  #log { height:96px; overflow:auto; background:#1a1a1a; border:1px solid var(--line);
+         border-radius:3px; padding:6px; font-family:Consolas,monospace; font-size:11px;
+         white-space:pre-wrap; word-break:break-all; color:#b9b9b9; }
+  .hint { color:var(--dim); font-size:11px; margin-top:4px; }
+  .err { color:#ff8080; }
+  .ok { color:#7ddc8a; }
+  .mklist { max-height:132px; overflow:auto; margin-top:6px; }
+  .mk { padding:3px 5px; border-radius:3px; cursor:pointer; font-family:Consolas,monospace;
+        font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .mk:hover { background:#3a3a3a; }
+</style>
+</head>
+<body>
+<h1>Source Marker · 源监视器助手</h1>
+
+<section>
+  <h2>当前打开在源监视器里的片段</h2>
+  <div id="clipName">（源监视器是空的）</div>
+  <div id="clipPath"></div>
+  <div class="row">
+    <span id="tcLine">入 —　出 —</span>
+    <span style="flex:1"></span>
+    <button id="btnRefresh" class="mini">刷新</button>
+  </div>
+</section>
+
+<section>
+  <h2>入点 / 出点</h2>
+  <div class="row">
+    <label>入</label><input id="InTc" class="tc" type="text" placeholder="00:00:00:00"/>
+    <label>出</label><input id="OutTc" class="tc" type="text" placeholder="00:00:00:00"/>
+    <button id="btnApply" class="mini">应用</button>
+  </div>
+  <div class="row">
+    <button id="btnSeekIn" class="mini">跳到入点</button>
+    <button id="btnSeekOut" class="mini">跳到出点</button>
+    <label>微调</label>
+    <input id="nudge" class="num" type="number" value="1" min="1"/>
+    <label>帧</label>
+    <button id="inMinus" class="mini">入 −</button>
+    <button id="inPlus" class="mini">入 ＋</button>
+    <button id="outMinus" class="mini">出 −</button>
+    <button id="outPlus" class="mini">出 ＋</button>
+  </div>
+  <div class="row">
+    <button id="btnPull" class="mini">读取时间线的入出点</button>
+    <button id="btnPush" class="mini">写到时间线</button>
+    <button id="btnClear" class="mini">清除</button>
+  </div>
+</section>
+
+<section>
+  <h2>导出这一段</h2>
+  <div class="row">
+    <label>保存到</label>
+    <input id="outDir" type="text" placeholder="点右侧按钮选一次，以后就记住了"/>
+    <button id="btnPickOutDir" class="mini">选择…</button>
+  </div>
+  <div class="row">
+    <label>输出格式</label>
+    <input id="presetPath" type="text" placeholder="选一个 Media Encoder 预设（.epr）"/>
+    <button id="btnPickPreset" class="mini">选择…</button>
+  </div>
+  <div class="row">
+    <label>文件名</label>
+    <span id="namePreview" class="preview">—</span>
+  </div>
+  <div class="row">
+    <label><input id="runBatch" type="checkbox" checked/> 导出后自动开始渲染</label>
+    <span style="flex:1"></span>
+    <button id="btnExport" class="primary">导出这一段</button>
+  </div>
+</section>
+
+<section>
+  <h2>放到时间线</h2>
+  <div class="row">
+    <select id="sendMode"><option value="insert">插入</option><option value="overwrite">覆盖</option></select>
+    <label>视频轨 V</label><input id="vIdx" class="num" type="number" value="1" min="1"/>
+    <label>音频轨 A</label><input id="aIdx" class="num" type="number" value="1" min="1"/>
+    <span style="flex:1"></span>
+    <button id="btnSend" class="primary">放到时间线</button>
+  </div>
+</section>
+
+<section>
+  <h2>导入标记文件</h2>
+  <div class="row">
+    <button id="btnPickMarkers" class="mini">选择文件…</button>
+    <span id="markerFile" class="preview">未选择</span>
+  </div>
+  <div class="row">
+    <label><input id="clearFirst" type="checkbox"/> 导入前先清空已有标记</label>
+    <span style="flex:1"></span>
+    <button id="btnListMarkers" class="mini">刷新列表</button>
+    <button id="btnImport" class="primary">导入</button>
+  </div>
+  <div id="markerList" class="mklist"><div class="hint">（点列表里的标记可把播放头跳过去）</div></div>
+</section>
+
+<section>
+  <h2>状态</h2>
+  <div class="row">
+    <button id="btnCopyLog" class="mini">复制状态信息</button>
+    <button id="btnCleanup" class="mini">清理导出产生的临时序列</button>
+    <span id="copyHint" class="hint"></span>
+  </div>
+  <div id="log"></div>
+</section>
+
+<script src="./main.js"></script>
+</body>
+</html>

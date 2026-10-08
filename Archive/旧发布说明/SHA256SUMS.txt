@@ -1,0 +1,12 @@
+# Source Marker v1.0.0 — SHA256 校验和
+
+下载后可用以下命令核对：
+
+```powershell
+Get-FileHash .\source-marker-1.0.0.zip -Algorithm SHA256
+```
+
+```
+b679c7a1d8d7370d7c746403e6605cdd5c7f8a8a4f6181eaf31b235186c73d61  source-marker-1.0.0.zip
+2e3bf3c29d443129b541587fbfd4f1ed4efd353a81d60c4627b41cd1d308cad7  source-marker-1.0.0-full.zip
+```

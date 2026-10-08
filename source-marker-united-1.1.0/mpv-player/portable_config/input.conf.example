@@ -1,0 +1,28 @@
+# mpv 的 input.conf 片段：想改键位时把对应行取消注释并改成你要的键。
+#
+# 默认键位已经由插件自己注册（F1 帮助 / F2 按钮面板 / Ctrl+m / Alt+m / Ctrl+1..8 / Ctrl+l /
+# Alt+n / Alt+p / Alt+g / Alt+e / Ctrl+DEL / Ctrl+e / Ctrl+i），一般不用动这个文件。
+# 只有在你想换键、或者发现与 mpv 默认键冲突时，才把下面几行启用。
+#
+# 命令名固定为  script-binding source-markers/<动作>：
+#
+# F1            script-binding source-markers/help
+# F2            script-binding source-markers/toggle-panel
+# Ctrl+m        script-binding source-markers/add
+# Alt+m         script-binding source-markers/add-prompt
+# Ctrl+1        script-binding source-markers/color-0
+# Ctrl+2        script-binding source-markers/color-1
+# Ctrl+3        script-binding source-markers/color-2
+# Ctrl+4        script-binding source-markers/color-3
+# Ctrl+5        script-binding source-markers/color-4
+# Ctrl+6        script-binding source-markers/color-5
+# Ctrl+7        script-binding source-markers/color-6
+# Ctrl+8        script-binding source-markers/color-7
+# Ctrl+l        script-binding source-markers/toggle-list
+# Alt+n         script-binding source-markers/next
+# Alt+p         script-binding source-markers/prev
+# Alt+g         script-binding source-markers/goto-prompt
+# Alt+e         script-binding source-markers/edit-nearest
+# Ctrl+DEL      script-binding source-markers/delete-nearest
+# Ctrl+e        script-binding source-markers/export-prompt
+# Ctrl+i        script-binding source-markers/import-prompt

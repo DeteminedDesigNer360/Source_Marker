@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<title>Source Marker</title>
+<script src="./CSInterface.js"></script>
+<style>
+  :root { --bg:#232323; --panel:#2d2d2d; --line:#3c3c3c; --fg:#d8d8d8; --dim:#8a8a8a; --accent:#4a9eff; }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:10px; background:var(--bg); color:var(--fg);
+         font:12px/1.5 "Segoe UI","Microsoft YaHei",sans-serif; }
+  h1 { font-size:13px; margin:0 0 8px; font-weight:600; letter-spacing:.3px; }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:8px; margin-bottom:8px; }
+  section > h2 { font-size:11px; margin:0 0 6px; color:var(--dim); font-weight:600; text-transform:uppercase; letter-spacing:.5px; }
+  .row { display:flex; gap:6px; align-items:center; margin-bottom:6px; }
+  .row:last-child { margin-bottom:0; }
+  label { color:var(--dim); white-space:nowrap; }
+  input[type=text], input[type=number], select {
+    flex:1; min-width:0; background:#1c1c1c; color:var(--fg);
+    border:1px solid var(--line); border-radius:3px; padding:4px 6px; font:inherit;
+  }
+  input.tc { flex:0 0 96px; font-family:Consolas,monospace; }
+  input.num { flex:0 0 52px; }
+  button { background:#3a3a3a; color:var(--fg); border:1px solid var(--line);
+           border-radius:3px; padding:4px 9px; font:inherit; cursor:pointer; }
+  button:hover { background:#454545; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#08121c; font-weight:600; }
+  button.primary:hover { background:#67b0ff; }
+  button.mini { padding:2px 6px; font-size:11px; }
+  #clipName { font-weight:600; color:#fff; word-break:break-all; }
+  #clipPath { color:var(--dim); font-size:11px; word-break:break-all; margin-bottom:4px; }
+  #tcLine { font-family:Consolas,monospace; color:var(--accent); }
+  #log { height:110px; overflow:auto; background:#1a1a1a; border:1px solid var(--line);
+         border-radius:3px; padding:6px; font-family:Consolas,monospace; font-size:11px;
+         white-space:pre-wrap; word-break:break-all; color:#b9b9b9; }
+  .hint { color:var(--dim); font-size:11px; margin-top:4px; }
+  .mklist { max-height:132px; overflow:auto; margin-top:6px; }
+  .mk { padding:3px 5px; border-radius:3px; cursor:pointer; font-family:Consolas,monospace;
+        font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .mk:hover { background:#3a3a3a; }
+  .err { color:#ff8080; }
+  .ok { color:#7ddc8a; }
+</style>
+</head>
+<body>
+<h1>Source Marker · 源监视器助手</h1>
+
+<section>
+  <h2>当前源监视器片段</h2>
+  <div id="clipName">—</div>
+  <div id="clipPath"></div>
+  <div class="row">
+    <span id="tcLine">in — / out —</span>
+    <span style="flex:1"></span>
+    <button id="btnRefresh" class="mini">刷新</button>
+  </div>
+</section>
+
+<section>
+  <h2>入出点精确编辑</h2>
+  <div class="row">
+    <label>In</label><input id="InTc" class="tc" type="text" placeholder="HH:MM:SS:FF"/>
+    <label>Out</label><input id="OutTc" class="tc" type="text" placeholder="HH:MM:SS:FF"/>
+    <button id="btnApply" class="mini">应用</button>
+  </div>
+  <div class="row">
+    <label>微调(帧)</label><input id="nudge" class="num" type="number" value="1" min="1"/>
+    <button id="inMinus" class="mini">In −</button>
+    <button id="inPlus" class="mini">In ＋</button>
+    <button id="outMinus" class="mini">Out −</button>
+    <button id="outPlus" class="mini">Out ＋</button>
+  </div>
+  <div class="row">
+    <button id="btnSeekIn" class="mini">跳到 In</button>
+    <button id="btnSeekOut" class="mini">跳到 Out</button>
+    <span class="hint">（走 QE，官方 API 无此能力）</span>
+  </div>
+  <div class="row">
+    <button id="btnPull" class="mini">← 序列入出点</button>
+    <button id="btnPush" class="mini">源入出点 →</button>
+    <button id="btnClear" class="mini">清除</button>
+    <button id="btnProbeQE" class="mini">探测 QE</button>
+    <button id="btnSelfTest" class="mini">自检</button>
+  </div>
+</section>
+
+<section>
+  <h2>导出源入出点范围</h2>
+  <div class="row"><label>目录</label><input id="outDir" type="text" placeholder="输出目录（选一次即记住）"/><button id="btnPickOutDir" class="mini">…</button></div>
+  <div class="row"><label>文件名</label><input id="outName" type="text" placeholder="{clip}_in{in}"/></div>
+  <div class="hint">变量：<code>{clip}</code> <code>{in}</code> <code>{out}</code> <code>{date}</code>，扩展名按预设自动补</div>
+  <div class="row" style="margin-top:6px"><label>预设</label><input id="presetPath" type="text" placeholder="预设 .epr（选一次即记住）"/><button id="btnPickPreset" class="mini">…</button></div>
+  <div class="row">
+    <label>策略</label>
+    <select id="strategy">
+      <option value="sequence">临时序列 → encodeSequence（✅ 已验证）</option>
+      <option value="subclip">encodeProjectItem（❌ Pr 24.0 上导出全长）</option>
+      <option value="file">encodeFile + in/out（⚠️ 实验）</option>
+    </select>
+    <button id="btnExport" class="primary">导出</button>
+  </div>
+  <div class="row">
+    <label><input id="runBatch" type="checkbox" checked/> 入队后立即让 AME 开始渲染</label>
+  </div>
+  <div class="row">
+    <label>临时序列</label>
+    <button id="btnCleanup" class="mini">清理临时对象</button>
+    <span class="hint">删除 SM 临时序列 + 自检残留；AME 渲染期间须保留故不能自动删</span>
+  </div>
+</section>
+
+<section>
+  <h2>插入 / 覆盖到序列</h2>
+  <div class="row">
+    <label>模式</label>
+    <select id="sendMode"><option value="insert">插入</option><option value="overwrite">覆盖</option></select>
+    <label>V</label><input id="vIdx" class="num" type="number" value="1" min="1"/>
+    <label>A</label><input id="aIdx" class="num" type="number" value="1" min="1"/>
+    <button id="btnSend" class="primary">发送</button>
+  </div>
+  <div class="hint">轨道号与 Pr 界面一致：<code>V1</code> 是第一条视频轨</div>
+</section>
+
+<section>
+  <h2>外部文件 → 源监视器标记</h2>
+  <div class="row">
+    <button id="btnPickMarkers" class="mini">选择文件…</button>
+    <span id="markerFile" style="color:var(--dim);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">未选择</span>
+  </div>
+  <div class="row">
+    <label><input id="clearFirst" type="checkbox"/> 导入前清空已有标记</label>
+    <span style="flex:1"></span>
+    <button id="btnListMarkers" class="mini">列出标记</button>
+    <button id="btnImport" class="primary">导入</button>
+  </div>
+  <div class="hint">支持 CSV / TSV / JSON / SRT。时间格式：<code>HH:MM:SS:FF</code>、<code>HH:MM:SS.mmm</code>、<code>MM:SS</code> 或纯秒数。</div>
+  <div id="markerList" class="mklist"><div class="hint">（点击列表项可把播放头跳过去）</div></div>
+</section>
+
+<section>
+  <h2>日志</h2>
+  <div class="row">
+    <button id="btnCopyLog" class="mini">复制全部</button>
+    <span id="copyHint" class="hint"></span>
+  </div>
+  <div id="log"></div>
+</section>
+
+<script src="./main.js"></script>
+</body>
+</html>
