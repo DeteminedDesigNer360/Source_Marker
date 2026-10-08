@@ -1807,14 +1807,18 @@ mp.register_event('file-loaded', function()
     end
 end)
 
--- 列表可见时重绘：按时间节流，避免每帧拼 ASS 字符串
+-- 列表 / 面板 / 帮助可见时重绘：按时间节流，避免每帧拼 ASS 字符串。
+-- 面板与帮助也必须在这里兜底：它们原先只在 file-loaded 时渲染一次，
+-- 而那一刻 OSD/窗口往往尚未就绪 → 覆盖层被丢弃后就再也不出现
+--（这正是「列表能记住、F2 面板记不住」的唯一机制差异）。
 local last_overlay_at = 0
 mp.observe_property('time-pos', 'number', function()
-    if not S.show_list then return end
+    if not S.show_list and not UI.panel and not UI.help then return end
     local now = os.clock()
     if now - last_overlay_at < 0.2 then return end
     last_overlay_at = now
-    update_overlay()
+    if S.show_list then update_overlay() end
+    if (UI.panel or UI.help) and redraw_ui then redraw_ui() end
 end)
 
 mp.register_event('shutdown', function()

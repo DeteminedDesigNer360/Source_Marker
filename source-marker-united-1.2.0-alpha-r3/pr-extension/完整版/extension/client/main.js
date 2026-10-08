@@ -1324,7 +1324,7 @@ on('btnImport', function () {
 /* ------------------------------ 启动 ------------------------------ */
 
 applySettings();
-log('Source Marker 1.2.0-alpha r2 已加载。');
+log('Source Marker 1.2.0-alpha r3 已加载。');
 refresh().then(loadMarkers).then(function () {
   restartAuto();
 });
