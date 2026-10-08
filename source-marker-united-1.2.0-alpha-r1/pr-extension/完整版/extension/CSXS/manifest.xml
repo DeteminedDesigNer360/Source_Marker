@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ExtensionManifest Version="7.0" ExtensionBundleId="com.frisk.sourcemarker"
-                   ExtensionBundleVersion="1.1.0" ExtensionBundleName="Source Marker">
+                   ExtensionBundleVersion="1.2.0" ExtensionBundleName="Source Marker">
   <ExtensionList>
-    <Extension Id="com.frisk.sourcemarker.panel" Version="1.1.0"/>
+    <Extension Id="com.frisk.sourcemarker.panel" Version="1.2.0"/>
   </ExtensionList>
   <ExecutionEnvironment>
     <HostList>

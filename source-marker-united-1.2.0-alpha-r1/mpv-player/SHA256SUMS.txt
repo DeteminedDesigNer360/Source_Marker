@@ -1,4 +1,4 @@
-# source-marker-united-1.1.0 / mpv-player —— 文件校验和（SHA256）
+# source-marker-united-1.2.0-alpha-r1 / mpv-player —— 文件校验和（SHA256）
 # 核对：powershell -ExecutionPolicy Bypass -File .\校验.ps1
 
 bfe9ee4cceabcb8ecbfadf208d04156f73d801e6a57369a5606bb8341e204a23  licenses/Copyright.txt
