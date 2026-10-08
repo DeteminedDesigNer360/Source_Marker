@@ -29,7 +29,7 @@
   可在 mpv.conf 里改路径与行为，例如：
       script-opts=source-markers-sidecar=yes
       script-opts=source-markers-time_format=ms       # ms（默认）| ff | sec | auto
-      script-opts=source-markers-default_color=1      # 0..7
+      script-opts=source-markers-default_color=0      # 0..7（0 = 绿，与 Pr 的默认标记色一致）
       script-opts=source-markers-dir=~~home/markers   # sidecar=no / 流输入时的目录
       script-opts=source-markers-csv_bom=no           # 导出 CSV 不带 BOM
 ]]
@@ -54,7 +54,7 @@ local o = {
     sidecar = true,            -- 与视频同名的 .marks.json 自动保存
     hide_sidecar = true,       -- 把自动保存的 .marks.json 设成隐藏文件（Windows；防误删/误改）
     dir = '~~home/markers',    -- sidecar=false 时的存放目录
-    default_color = 1,         -- 默认当前颜色（Pr 索引 0..7）
+    default_color = 0,         -- 默认当前颜色（0 = 绿；与 Pr 的默认标记色一致）
     time_format = 'ms',        -- ms（规范默认）| ff | sec | auto
     csv_bom = true,            -- 导出 CSV 是否带 UTF-8 BOM（Excel 友好）
     import_mode = 'replace',   -- replace | append
@@ -98,7 +98,7 @@ end
 
 local S = {
     markers = {},       -- { t=秒, name=, comment=, color= }
-    color = tonumber(o.default_color) or 1,
+    color = tonumber(o.default_color) or 0,
     show_list = false,
     overlay = nil,
     sidecar = nil,      -- 当前视频对应的 sidecar 路径
@@ -789,7 +789,8 @@ end
 
 local function load_sidecar()
     S.markers = {}
-    S.show_list = false
+    -- show_list 不在这里重置：它由界面状态文件持久化（见 load_ui_state），
+    -- 否则每次换素材都会把「显示列表」的选择抹掉。
     update_overlay()
     if not o.sidecar then return end          -- sidecar=no 时既不写也不读
     local path = sidecar_path()
@@ -885,9 +886,14 @@ function update_overlay()
     S.overlay:update()
 end
 
+-- 前向声明：下面这两件事定义在文件后段（Lua 的 local 必须先声明后使用）
+local save_ui_state = nil        -- 界面状态持久化（定义在文件末尾附近）
+local redraw_ui      = nil        -- 面板 / 帮助浮窗重绘（定义在按钮面板那一段之后）
+
 local function toggle_list()
     S.show_list = not S.show_list
     update_overlay()
+    if save_ui_state then save_ui_state() end
     notify(S.show_list and (string.format('标记列表：%d 条', #S.markers)) or '已隐藏标记列表')
 end
 
@@ -922,7 +928,7 @@ local function add_marker(comment)
         t = t,
         name = '',                                -- name 列留空（Pr 只认 comment 列）
         comment = comment and trim(comment) or '',
-        color = tonumber(S.color) or 1,
+        color = tonumber(S.color) or 0,
     }
     S.markers[#S.markers + 1] = m
     sort_markers()
@@ -940,6 +946,7 @@ local function set_color(idx)
         return
     end
     S.color = idx
+    if redraw_ui then redraw_ui() end          -- 立刻重绘面板/帮助，不必等鼠标移出面板
     notify(string.format('当前颜色：%d %s', idx, color_name(idx)))
 end
 
@@ -1484,6 +1491,7 @@ end
 local function toggle_panel(state)
     UI.panel = (state == nil) and (not UI.panel) or (state == true)
     render_panel()
+    if save_ui_state then save_ui_state() end      -- 快捷键 / 按钮 / 脚本消息，任何路径都立即落盘
     if UI.panel then
         notify('按钮面板已打开：所有功能都能点（' .. key_of('toggle-panel') .. ' 关闭，' .. key_of('help') .. ' 帮助）')
     else
@@ -1493,7 +1501,14 @@ end
 
 local function toggle_help(state)
     show_help(state)
+    if save_ui_state then save_ui_state() end
     if UI.help then notify('帮助已显示（' .. key_of('help') .. ' 关闭；' .. key_of('toggle-panel') .. ' 打开按钮面板）') end
+end
+
+-- 面板 / 帮助的重绘入口：给「改了状态但没经过鼠标事件」的路径用（例如切换颜色）
+redraw_ui = function()
+    if UI.panel then render_panel() end
+    if UI.help then show_help(true) end
 end
 
 -- 悬停高亮：鼠标位置变化时只重绘必要的部分
@@ -1635,15 +1650,20 @@ local function load_ui_state()
     local d = json_decode(read_file(p) or '')
     if type(d) == 'table' then
         if d.hint_shown ~= nil then UI.hint_shown = d.hint_shown == true end
+        if d.help ~= nil then UI.help = d.help == true end
+        if d.show_list ~= nil then S.show_list = d.show_list == true end
         -- 配置文件里显式写了 panel=yes 时以配置为准，否则沿用上次的选择
         if o.panel ~= true and d.panel ~= nil then UI.panel = d.panel == true end
     end
 end
 
-local function save_ui_state()
+save_ui_state = function()
     local p = ui_state_path()
     if not p then return end
-    write_file_atomic(p, json_encode({ panel = UI.panel, hint_shown = UI.hint_shown }))
+    -- 三项开关全部落盘：按钮面板 / 帮助浮窗 / 标记列表（外加「首次提示已显示」）
+    write_file_atomic(p, json_encode({
+        panel = UI.panel, help = UI.help, show_list = S.show_list, hint_shown = UI.hint_shown,
+    }))
 end
 
 load_ui_state()

@@ -1,4 +1,4 @@
-# Source Marker 合并版 v1.2.0-alpha-r1（代号待定）
+# Source Marker 合并版 v1.2.0-alpha-r2（代号待定）
 
 把**两个相互配套的插件**放进同一个包，并让它们真正互通：
 
@@ -15,7 +15,7 @@
 ## 包里有什么
 
 ```
-source-marker-united-1.2.0-alpha-r1/
+source-marker-united-1.2.0-alpha-r2/
 ├── 快速上手.md              ← 先读这个（从打标记到导入 Pr 的完整流程）
 ├── README.md                本文件
 ├── 改动说明.md              所有改动、取舍与真机验证记录（想看"改了什么、为什么"就看它）
