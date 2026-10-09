@@ -12,7 +12,7 @@
 const path = require('path');
 const { loadParser } = require('./pr-parser.js');
 
-const MAIN_JS = path.join(__dirname, '..', 'source-marker-united-1.2.0-alpha-r4', 'pr-extension', '完整版', 'extension', 'client', 'main.js');
+const MAIN_JS = path.join(__dirname, '..', 'source-marker-united-1.2.0-alpha-r5', 'pr-extension', '完整版', 'extension', 'client', 'main.js');
 const parser = loadParser(MAIN_JS);
 const parseMarkerFile = parser.parseMarkerFile;
 const secondsToTimecode = parser.secondsToTimecode;
