@@ -1,7 +1,7 @@
 --[[
   source-markers.lua —— mpv 播放头标记插件（与 Premiere「Source Marker」面板互通）
 
-  做标记：在播放头位置记录 时间戳 / 颜色 / 描述，可列表查看、跳转、导入导出。
+  做标记：在播放头位置记录 时间戳 / 颜色 / 正文，可列表查看、跳转、导入导出。
   导出文件直接喂给 Pr 的 CEP 面板「导入标记」（CSV/JSON/SRT，颜色为 Pr 标记色索引）。
 
   安装（便携 mpv）：把本文件放到
@@ -12,12 +12,12 @@
       F1              帮助浮窗（列出全部快捷键）
       F2              可点击的按钮面板（鼠标党入口，可一直留着）
       Ctrl+m          在播放头打标记（用当前颜色）
-      Alt+m           打标记并输入描述（描述就是 Pr 里看到的标记名）
+      Alt+m           打标记并输入正文（正文就是 Pr 里看到的标记名）
       Ctrl+1 .. 8     设定当前颜色（对应 Pr 标记色 0..7：绿/红/紫/橙/黄/白/蓝/青）
       Ctrl+l          显示 / 隐藏标记列表
       Alt+n / Alt+p   跳到下一个 / 上一个标记
       Alt+g           按序号跳转
-      Alt+e           编辑离播放头最近的标记的描述（只改描述）
+      Alt+e           编辑离播放头最近的标记的正文（只改正文）
       Ctrl+DEL        删除离播放头最近的标记
       Ctrl+e          导出（默认路径出现后可直接回车，或改成别的路径）
       Ctrl+i          导入（CSV / TSV / JSON / SRT）
@@ -442,7 +442,7 @@ end
 
 local KEY_TIME = '^(time|tc|timecode|start|in|timestamp|时间|时间码|时间戳|起始)$'
 local KEY_NAME = '^(name|title|label|名称|标题|标签)$'
-local KEY_DESC = '^(comment|comments|desc|description|content|text|note|notes|内容|备注|描述|说明)$'
+local KEY_DESC = '^(comment|comments|desc|description|content|text|note|notes|内容|备注|描述|正文|说明)$'
 local KEY_COLOR = '^(color|colour|颜色)$'
 
 local function detect_delimiter(head)
@@ -916,7 +916,7 @@ local function nearest_index()
     return idx
 end
 
--- 用户输入一律作为「描述」写进 comment 列，name 列留空。
+-- 用户输入一律作为「正文」写进 comment 列，name 列留空。
 -- Pr 面板的标记名只取「备注/comment 列」、name 列整列忽略，所以这里不生成任何占位名。
 local function add_marker(comment)
     local t = head_time()
@@ -1020,7 +1020,7 @@ local function edit_nearest(text)
         return
     end
     local m = S.markers[idx]
-    m.comment = trim(text or '')          -- 只改描述；name 列留空
+    m.comment = trim(text or '')          -- 只改正文；name 列留空
     save_sidecar()
     update_overlay()
     notify(string.format('已更新 %s：%s', to_timecode(m.t, get_fps() or 25), m.comment))
@@ -1541,12 +1541,12 @@ local function register(action, handler)
     HANDLERS[action.name] = handler
 end
 
-register({ key = 'Ctrl+m', name = 'add', label = '＋ 标记',
+register({ key = 'Ctrl+m', name = 'add', label = '打标记',
     help = '在播放头打一个标记（用当前颜色）' }, function() add_marker(nil) end)
 
-register({ key = 'Alt+m', name = 'add-prompt', label = '＋ 描述',
-    help = '打标记并输入描述 —— 描述会成为 Pr 里的标记名' }, function()
-    ask_text('标记描述（会成为 Pr 里的标记名）', '', function(text)
+register({ key = 'Alt+m', name = 'add-prompt', label = '打标记 + 正文',
+    help = '打标记并输入正文 —— 正文会成为 Pr 里的标记名' }, function()
+    ask_text('标记正文（会成为 Pr 里的标记名）', '', function(text)
         if text == nil then return end
         add_marker(text)
     end)
@@ -1561,9 +1561,9 @@ end
 
 register({ key = 'Ctrl+l', name = 'toggle-list', label = '标记列表',
     help = '显示 / 隐藏标记列表' }, toggle_list)
-register({ key = 'Alt+n', name = 'next', label = '下一个 ▶',
+register({ key = 'Alt+n', name = 'next', label = '下一个标记',
     help = '跳到下一个标记（帧精确）' }, function() step_marker(1) end)
-register({ key = 'Alt+p', name = 'prev', label = '◀ 上一个',
+register({ key = 'Alt+p', name = 'prev', label = '上一个标记',
     help = '跳到上一个标记' }, function() step_marker(-1) end)
 register({ key = 'Alt+g', name = 'goto-prompt', label = '按序跳转',
     help = '按序号跳到某个标记' }, function()
@@ -1583,18 +1583,18 @@ register({ key = 'Alt+g', name = 'goto-prompt', label = '按序跳转',
         end)
     end
 end)
-register({ key = 'Alt+e', name = 'edit-nearest', label = '编辑描述',
-    help = '编辑离播放头最近的标记的描述' }, function()
+register({ key = 'Alt+e', name = 'edit-nearest', label = '改正文',
+    help = '编辑离播放头最近的标记的正文' }, function()
     local idx = nearest_index()
     if not idx then notify('还没有标记') return end
-    ask_text('编辑描述（会成为 Pr 里的标记名）', S.markers[idx].comment or '', function(text)
+    ask_text('编辑正文（会成为 Pr 里的标记名）', S.markers[idx].comment or '', function(text)
         if text == nil then return end
         edit_nearest(text)
     end)
 end)
-register({ key = 'Ctrl+DEL', name = 'delete-nearest', label = '删除最近',
+register({ key = 'Ctrl+DEL', name = 'delete-nearest', label = '删除标记',
     help = '删除离播放头最近的标记' }, delete_nearest)
-register({ key = 'Ctrl+e', name = 'export-prompt', label = '导出',
+register({ key = 'Ctrl+e', name = 'export-prompt', label = '导出标记',
     help = '导出 CSV/JSON（默认路径直接回车）' }, function()
     ask_text('导出到（回车用默认路径）', default_export_path(), function(text)
         if text == nil then return end
@@ -1602,7 +1602,7 @@ register({ key = 'Ctrl+e', name = 'export-prompt', label = '导出',
         export_to(text)
     end)
 end)
-register({ key = 'Ctrl+i', name = 'import-prompt', label = '导入',
+register({ key = 'Ctrl+i', name = 'import-prompt', label = '导入标记',
     help = '从文件导入标记（CSV / TSV / JSON / SRT）' }, function()
     ask_text('从哪个文件导入？（CSV/TSV/JSON/SRT）', S.last_export or S.sidecar or '', function(text)
         if text == nil then return end
@@ -1798,7 +1798,7 @@ mp.register_event('file-loaded', function()
         UI.hint_shown = true
         save_ui_state()
         toggle_help(true)
-        notify(string.format('新手提示：%s 看快捷键，%s 打开可点击的按钮面板；描述就是 Pr 里的标记名',
+        notify(string.format('新手提示：%s 看快捷键，%s 打开可点击的按钮面板；正文就是 Pr 里的标记名',
             key_of('help'), key_of('toggle-panel')))
         log('新手提示：%s 帮助 / %s 按钮面板（本次是首次使用，之后不再自动弹出）',
             key_of('help'), key_of('toggle-panel'))
@@ -1827,7 +1827,7 @@ mp.register_event('shutdown', function()
     save_ui_state()
 end)
 
-msg.info(string.format('source-markers 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；描述输入=%s',
+msg.info(string.format('source-markers 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
     #ACTIONS, key_of('help'), key_of('toggle-panel'),
     tostring(o.sidecar), tostring(o.hide_sidecar), tostring(o.time_format),
     input and 'mp.input（播放器内输入框）' or 'python 兜底对话框'))
