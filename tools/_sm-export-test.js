@@ -1,5 +1,5 @@
 /* _sm-export-test.js —— Pr 导出编码器的离线校验
- * 放在工作集根目录（**不进交付包**，避免多出第 17 个差异文件）。
+ * 放在工作区 tools/ 下（**不进交付包**，避免多出第 17 个差异文件）。
  *
  * 校验方式有一处特别值得说：契约文档《标记文件格式-v1.md》§1.4 与 §2 自带样例，
  * 那就是**冻结契约自己的金标准**。如果我的编码器能把那两段样例一字不差地复现出来，
@@ -306,6 +306,25 @@ eq('smPromptText：清空正文是合法输入（返回空串，不是取消）'
 delete ctx3.prompt;
 ok('smPromptText：此版本没有原生 prompt → 明确报不可用（面板据此退回编辑条）',
    sp('t', '').fields[0].indexOf('没有') >= 0);
+
+/* ---------- 契约守卫：两侧解析器的中文表头别名表必须完整 ----------
+ * 回归来源：统一用词时做过一次整批替换（「描述」→「正文」），
+ * 误伤了 Lua 里契约规定的别名表 —— 用「描述」作表头的 CSV 会读不出来，
+ * 而当时 74 项全绿也没拦住它（因为本文件从不读 Lua 源文件，只手工移植算法）。
+ * 这里直接读三个源文件的别名正则来兜。 */
+const PKG = path.resolve(path.dirname(MAIN), '..', '..', '..', '..');
+const ALIAS_WORDS = ['内容', '备注', '描述', '说明'];   // 契约《标记文件格式-v1.md》规定的中文表头
+const luaDoc = fs.readFileSync(path.join(PKG, 'mpv-player', 'portable_config', 'scripts', 'source-markers.lua'), 'utf8');
+const luaAlias = (luaDoc.match(/KEY_DESC = '\^\(([^)]+)\)/) || [])[1] || '';
+ok('契约别名：能解析到 Lua 侧 KEY_DESC', luaAlias.length > 0, luaAlias);
+ALIAS_WORDS.forEach(w => ok('契约别名：Lua 侧必须接受表头「' + w + '」', luaAlias.indexOf(w) >= 0, luaAlias));
+ok('契约别名：Lua 侧额外接受「正文」', luaAlias.indexOf('正文') >= 0, luaAlias);
+['新手版', '完整版'].forEach(v => {
+  const t = fs.readFileSync(path.join(PKG, 'pr-extension', v, 'extension', 'client', 'main.js'), 'utf8');
+  const a = (t.match(/KEY_DESC = \/\^\(([^)]+)\)/) || [])[1] || '';
+  ok('契约别名：能解析到' + v + '侧 KEY_DESC', a.length > 0, a);
+  ALIAS_WORDS.forEach(w => ok('契约别名：' + v + '侧必须接受表头「' + w + '」', a.indexOf(w) >= 0, a));
+});
 
 /* ---------- 汇总 ---------- */
 console.log('通过 ' + pass + ' 项，失败 ' + fail + ' 项');
