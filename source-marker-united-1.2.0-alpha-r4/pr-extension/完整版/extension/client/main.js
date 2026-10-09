@@ -264,7 +264,7 @@ function parseCSV(text) {
 
 var KEY_TIME = /^(time|tc|timecode|start|in|timestamp|时间|时间码|时间戳|起始)$/i;
 var KEY_NAME = /^(name|title|label|名称|标题|标签)$/i;
-var KEY_DESC = /^(comment|comments|desc|description|content|text|note|notes|内容|备注|描述|说明)$/i;
+var KEY_DESC = /^(comment|comments|desc|description|content|text|note|notes|内容|备注|描述|正文|说明)$/i;
 var KEY_COLOR = /^(color|colour|颜色)$/i;
 
 function mapColumns(header) {
@@ -451,7 +451,7 @@ function refresh() {
     if (!res.ok) {
       document.getElementById('clipName').textContent = '（源监视器为空）';
       document.getElementById('clipPath').textContent = '';
-      document.getElementById('tcLine').textContent = 'in — / out —';
+      document.getElementById('tcLine').textContent = '入点 — / 出点 —';
       STATE.markers = [];
       return;
     }
@@ -559,9 +559,9 @@ document.getElementById('mkEditText').addEventListener('blur', function () { fin
 on('btnApply', function () {
   var i = parseTimeToSeconds(document.getElementById('InTc').value, STATE.fps);
   var o = parseTimeToSeconds(document.getElementById('OutTc').value, STATE.fps);
-  if (isNaN(i) || isNaN(o)) { log('入/出点时间格式无法解析', 'err'); return; }
+  if (isNaN(i) || isNaN(o)) { log('入点/出点时间格式无法解析', 'err'); return; }
   callJSX('smSetInOut', i, o).then(function (r) {
-    log((r.ok ? '入出点已设置: ' : '失败: ') + describe(r), r.ok ? 'ok' : 'err');
+    log((r.ok ? '入点和出点已设置: ' : '失败: ') + describe(r), r.ok ? 'ok' : 'err');
     refresh();
   });
 });
@@ -630,7 +630,7 @@ function nudgePump() {
       /* 引擎的 ok=true 只代表"调用没报错"，**不代表值真的动对了** ——
          判定写在字段里（VERIFIED / MISMATCH-CHECK）。所以按判定上色，
          否则 MISMATCH 会被刷成绿色的 OK，又是一次"制造虚假把握"。 */
-      log('微调 ' + (which === 'out' ? 'Out' : 'In') + ' ' + (frames > 0 ? '+' : '') + frames +
+      log('微调 ' + (which === 'out' ? '出点' : '入点') + ' ' + (frames > 0 ? '+' : '') + frames +
           ' 帧 → ' + d, (d.indexOf('VERIFIED') >= 0) ? 'ok' : 'warn');
       refresh();
       var sec = parseFloat(r.fields[0]);
@@ -649,7 +649,7 @@ on('outPlus', function () { nudge('out', 1); });
    直接搬运数值一般没有意义。原因与"要恢复请先定清语义"见 改动说明 §15。 */
 on('btnClear', function () {
   callJSX('smClearInOut').then(function (r) {
-    log((r.ok ? '入出点已清除' : '失败: ' + describe(r)), r.ok ? 'ok' : 'err');
+    log((r.ok ? '已清除源入点和出点' : '失败: ' + describe(r)), r.ok ? 'ok' : 'err');
     refresh();
   });
 });

@@ -57,7 +57,7 @@
   <div id="clipName">—</div>
   <div id="clipPath"></div>
   <div class="row">
-    <span id="tcLine">in — / out —</span>
+    <span id="tcLine">入点 — / 出点 —</span>
     <span style="flex:1"></span>
     <button id="btnOpenInPlayer" class="mini">用播放器打开</button>
     <button id="btnPlaySource" class="mini">播放源</button>
@@ -108,26 +108,26 @@
 <section>
   <h2>源片段入出点</h2>
   <div class="row">
-    <label>In</label><input id="InTc" class="tc" type="text" placeholder="HH:MM:SS:FF"/>
-    <label>Out</label><input id="OutTc" class="tc" type="text" placeholder="HH:MM:SS:FF"/>
+    <label>入点</label><input id="InTc" class="tc" type="text" placeholder="HH:MM:SS:FF"/>
+    <label>出点</label><input id="OutTc" class="tc" type="text" placeholder="HH:MM:SS:FF"/>
     <button id="btnApply" class="mini">应用</button>
   </div>
   <div class="row">
     <label>微调(帧)</label><input id="nudge" class="num" type="number" value="1" min="1"/>
-    <button id="inMinus" class="mini">In −</button>
-    <button id="inPlus" class="mini">In ＋</button>
-    <button id="outMinus" class="mini">Out −</button>
-    <button id="outPlus" class="mini">Out ＋</button>
+    <button id="inMinus" class="mini">入点 −</button>
+    <button id="inPlus" class="mini">入点 ＋</button>
+    <button id="outMinus" class="mini">出点 −</button>
+    <button id="outPlus" class="mini">出点 ＋</button>
     <label style="font-size:11px;color:var(--dim);display:flex;align-items:center;gap:3px;cursor:pointer" title="微调后把播放头也移到新的入/出点。连按太快时 Pr 可能卡顿，可关掉。"><input id="followNudge" type="checkbox" checked/> 跟随</label>
   </div>
   <div class="row">
-    <button id="btnSeekIn" class="mini" title="把源监视器的播放头移到入点。Pr 官方 API 没有定位源监视器的能力，这里走 QE 通道。">跳到 In</button>
-    <button id="btnSeekOut" class="mini" title="把源监视器的播放头移到出点。Pr 官方 API 没有定位源监视器的能力，这里走 QE 通道。">跳到 Out</button>
+    <button id="btnSeekIn" class="mini" title="把源监视器的播放头移到入点。Pr 官方 API 没有定位源监视器的能力，这里走 QE 通道。">跳到入点</button>
+    <button id="btnSeekOut" class="mini" title="把源监视器的播放头移到出点。Pr 官方 API 没有定位源监视器的能力，这里走 QE 通道。">跳到出点</button>
   </div>
   <div class="row">
     <button id="btnClear" class="mini">清除源入点和出点</button>
   </div>
-  <div class="hint">「跳到 In/Out」以及「微调」之后的播放头跟随，都靠 <b>QE 通道</b>定位源监视器 —— Pr 官方 API 没有这个能力。</div>
+  <div class="hint">「跳到入点/出点」以及「微调」之后的播放头跟随，都靠 <b>QE 通道</b>定位源监视器 —— Pr 官方 API 没有这个能力。</div>
 </section>
 
 <section>
