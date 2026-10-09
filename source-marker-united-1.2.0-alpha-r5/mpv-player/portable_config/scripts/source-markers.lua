@@ -1291,7 +1291,7 @@ local function key_of(name)
     return '?'
 end
 
-local UI = { help = false, panel = o.panel == true, hover = nil, hint_shown = false }
+local UI = { help = false, panel = o.panel == true, hover = nil, hint_shown = false, mode = false }
 local PANEL_BUTTONS = {}          -- 渲染后填充：{name,label,x,y,w,h,section}
 local SIDE_PADDING = 40
 
@@ -1549,10 +1549,86 @@ local function toggle_help(state)
     if UI.help then notify('帮助已显示（' .. key_of('help') .. ' 关闭；' .. key_of('toggle-panel') .. ' 打开按钮面板）') end
 end
 
--- 面板 / 帮助的重绘入口：给「改了状态但没经过鼠标事件」的路径用（例如切换颜色）
+-- ============================== 标记模式（1.2.0「交织」③） ==============================
+-- F10 开关；开启后接管四个裸键，向 Pr 源监视器看齐：
+--   M            在当前播放头打标记   （Pr：添加标记）
+--   Shift+M      跳到下一个标记
+--   Ctrl+Shift+M 跳到上一个标记
+--   Del          删除播放头处的标记
+-- 为什么做成"模式"：mpv 里裸字母都被它自己占了（m=静音 等），而真机实测 ——
+-- mp.add_key_binding 的绑定【能盖过 mpv 内置绑定】，但【用户自己的 input.conf 优先级更高】。
+-- 所以既有快捷键（Ctrl+m 等）与 F2 按钮面板一律保留：模式被占也还有保底路径。
+local MODE_KEYS = {
+    { key = 'm',            name = 'add',            label = '打标记' },
+    { key = 'Shift+m',      name = 'next',           label = '下一个标记' },
+    { key = 'Ctrl+Shift+m', name = 'prev',           label = '上一个标记' },
+    { key = 'Del',          name = 'delete-nearest', label = '删除标记' },
+}
+local overlay_mode = new_overlay()
+
+local function mode_dispatch(name)
+    msg.verbose('标记模式按键 → ' .. tostring(name))
+    local fn = HANDLERS[name]
+    if fn then fn() else msg.warn('标记模式：找不到动作 ' .. tostring(name)) end
+end
+-- 开=逐个 add_key_binding，关=逐个 remove_key_binding。
+-- 选这条而不是 section API，是因为**真机实测**过：add_key_binding 的绑定能盖过 mpv 内置键，
+-- 而 section 那套在本机 mpv 上按 m 没有任何反应（同一个键、两种机制，行为不同）。
+-- 另外 add_key_binding 的返回值在旧 mpv 上是 nil，所以不能用 返回值:disable() 那套。
+local function mode_bindings_apply(on)
+    local n = 0
+    for _, spec in ipairs(MODE_KEYS) do
+        local bname = 'source-markers-mode-' .. spec.name
+        if on then
+            mp.add_key_binding(spec.key, bname, function() mode_dispatch(spec.name) end)
+            n = n + 1
+        elseif type(mp.remove_key_binding) == 'function' then
+            mp.remove_key_binding(bname)
+            n = n + 1
+        end
+    end
+    log('标记模式绑定：%s（处理 %d 个键；remove_key_binding=%s）',
+        on and '已启用' or '已关闭', n, tostring(type(mp.remove_key_binding)))
+end
+local function render_mode_badge()
+    local w, h = osd_size()
+    if not UI.mode or not w or not h then
+        set_overlay(overlay_mode, nil, w, h)
+        return
+    end
+    local size = math.max(14, math.floor(ui_font() * 0.85))
+    local text = '标记模式　F10 退出'
+    local bw = math.floor(#text * size * 0.95) + 18
+    local bh = size + 12
+    local x = math.max(SIDE_PADDING, w - bw - 24)
+    local y = math.max(SIDE_PADDING, h - bh - 24)
+    set_overlay(overlay_mode, {
+        rect_line(x, y, bw, bh, '&H000000&', '80'),
+        text_line(x + 9, y + 6, size, '&H4DE0FF&', text, true),
+    }, w, h)
+end
+
+local function set_marker_mode(on, quiet)
+    UI.mode = (on == nil) and (not UI.mode) or (on == true)
+    mode_bindings_apply(UI.mode)
+    render_mode_badge()
+    if not quiet then
+        if UI.mode then
+            notify('标记模式：M 打标记 · Shift+M 下一个 · Ctrl+Shift+M 上一个 · Del 删除 · F10 退出')
+        else
+            notify('已退出标记模式')
+        end
+    end
+    if save_ui_state then save_ui_state() end
+end
+
+
+
+-- 面板 / 帮助 / 标记模式徽标的重绘入口：给「改了状态但没经过鼠标事件」的路径用（例如切换颜色）
 redraw_ui = function()
     if UI.panel then render_panel() end
     if UI.help then show_help(true) end
+    render_mode_badge()
 end
 
 -- 悬停高亮：鼠标位置变化时只重绘必要的部分
@@ -1658,6 +1734,11 @@ register({ key = 'F1', name = 'help', label = '帮助',
 register({ key = 'F2', name = 'toggle-panel', label = '按钮面板',
     help = '显示 / 隐藏可点击的按钮面板（鼠标党的入口）' }, function() toggle_panel() end)
 
+register({ key = 'F10', name = 'marker-mode', label = '标记模式',
+    help = '开关标记模式：开启后 M 打标记 / Shift+M 下一个 / Ctrl+Shift+M 上一个 / Del 删除（右下角有小标）' }, function()
+    set_marker_mode()
+end)
+
 for _, a in ipairs(ACTIONS) do
     local fn = HANDLERS[a.name]
     local ok, err = pcall(mp.add_key_binding, a.key, a.name, fn or function() end)
@@ -1696,6 +1777,7 @@ local function load_ui_state()
         if d.hint_shown ~= nil then UI.hint_shown = d.hint_shown == true end
         if d.help ~= nil then UI.help = d.help == true end
         if d.show_list ~= nil then S.show_list = d.show_list == true end
+        if d.mode ~= nil then UI.mode = d.mode == true end
         -- 上次会话的选择优先；配置里的 panel=yes/no 只在"还没有界面状态文件"时当默认值。
         -- （原来写成"配置写了 panel=yes 就以配置为准"，结果 F2 关掉面板后下次启动又会被强开 ✗）
         if d.panel ~= nil then UI.panel = d.panel == true end
@@ -1707,7 +1789,7 @@ save_ui_state = function()
     if not p then return end
     -- 三项开关全部落盘：按钮面板 / 帮助浮窗 / 标记列表（外加「首次提示已显示」）
     write_file_atomic(p, json_encode({
-        panel = UI.panel, help = UI.help, show_list = S.show_list, hint_shown = UI.hint_shown,
+        panel = UI.panel, help = UI.help, show_list = S.show_list, hint_shown = UI.hint_shown, mode = UI.mode,
     }))
 end
 
@@ -1717,6 +1799,9 @@ load_ui_state()
 -- ①共享颜色表：只读一次（改颜色表要重启 mpv，与"改配置要重启"一致）
 apply_shared_colors()
 msg.info('颜色表来源：' .. COLOR_TABLE_STATE)
+
+-- ③标记模式：沿用上次会话的开关（quiet=true，启动时不弹提示；徽标由 time-pos 观察者兜底重绘）
+set_marker_mode(UI.mode == true, true)
 
 -- 脚本消息（外部工具 / 自动化测试用；与按钮、快捷键走同一批处理函数）
 ----------------------------------------------------------------------
@@ -1862,12 +1947,12 @@ end)
 --（这正是「列表能记住、F2 面板记不住」的唯一机制差异）。
 local last_overlay_at = 0
 mp.observe_property('time-pos', 'number', function()
-    if not S.show_list and not UI.panel and not UI.help then return end
+    if not S.show_list and not UI.panel and not UI.help and not UI.mode then return end
     local now = os.clock()
     if now - last_overlay_at < 0.2 then return end
     last_overlay_at = now
     if S.show_list then update_overlay() end
-    if (UI.panel or UI.help) and redraw_ui then redraw_ui() end
+    if (UI.panel or UI.help or UI.mode) and redraw_ui then redraw_ui() end
 end)
 
 mp.register_event('shutdown', function()
