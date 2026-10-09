@@ -63,7 +63,7 @@ local o = {
     overlay_y = 50,
     overlay_size = 22,
     overlay_limit = 18,
-    panel = false,             -- 启动时是否显示按钮面板（F2 随时开关；鼠标可点）
+    panel = false,             -- 首次启动是否显示按钮面板；之后以 F2 的选择为准（存在界面状态文件里）
     panel_anchor = 'bottom-left', -- bottom-left | top-left | top-right | bottom-right
     panel_x = 40,              -- 面板左右留白
     panel_bottom = 0,          -- 距底部像素；0 = 自动（抬到 mpv 进度条上方）
@@ -1652,8 +1652,9 @@ local function load_ui_state()
         if d.hint_shown ~= nil then UI.hint_shown = d.hint_shown == true end
         if d.help ~= nil then UI.help = d.help == true end
         if d.show_list ~= nil then S.show_list = d.show_list == true end
-        -- 配置文件里显式写了 panel=yes 时以配置为准，否则沿用上次的选择
-        if o.panel ~= true and d.panel ~= nil then UI.panel = d.panel == true end
+        -- 上次会话的选择优先；配置里的 panel=yes/no 只在"还没有界面状态文件"时当默认值。
+        -- （原来写成"配置写了 panel=yes 就以配置为准"，结果 F2 关掉面板后下次启动又会被强开 ✗）
+        if d.panel ~= nil then UI.panel = d.panel == true end
     end
 end
 
