@@ -1802,6 +1802,8 @@ msg.info('颜色表来源：' .. COLOR_TABLE_STATE)
 
 -- ③标记模式：沿用上次会话的开关（quiet=true，启动时不弹提示；徽标由 time-pos 观察者兜底重绘）
 set_marker_mode(UI.mode == true, true)
+msg.info('标记模式：' .. key_of('marker-mode') .. ' 开关（M 打标记 / Shift+M 下一个 / Ctrl+Shift+M 上一个 / Del 删除）'
+    .. '；注意：用户自定义 input.conf 的优先级更高，会盖掉这些裸键')
 
 -- 脚本消息（外部工具 / 自动化测试用；与按钮、快捷键走同一批处理函数）
 ----------------------------------------------------------------------
@@ -1960,7 +1962,7 @@ mp.register_event('shutdown', function()
     save_ui_state()
 end)
 
-msg.info(string.format('source-markers 1.2.0-alpha r5 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
+msg.info(string.format('source-markers 1.2.0-alpha r6 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
     #ACTIONS, key_of('help'), key_of('toggle-panel'),
     tostring(o.sidecar), tostring(o.hide_sidecar), tostring(o.time_format),
     input and 'mp.input（播放器内输入框）' or 'python 兜底对话框'))

@@ -2,7 +2,7 @@
 #
 #   1) BOM 自检      tools\ensure-ps1-bom.ps1 -CheckOnly            （只查不改：避免动到 Archive 里的只读基线）
 #   2) 离线断言      tools\_sm-export-test.js                       （74 项：契约样例 / 编码器 / 时间码 / 边界）
-#   3) 发行包自检    source-marker-united-1.2.0-alpha-r5\mpv-player\校验.ps1  （16 个文件 SHA256）
+#   3) 发行包自检    source-marker-united-1.2.0-alpha-r6\mpv-player\校验.ps1  （16 个文件 SHA256）
 #   4) 读取方契约    tools\verify-import.js                         （用 Pr 真实解析段，28 项）
 #   5) 许可取证      tools\collect-mpv-provenance.py --quiet         （从分发的 mpv.exe 重新证明是 GPL 构建）
 #
@@ -35,7 +35,7 @@ Run-Step '离线断言（74 项）' {
     & node (Join-Path $root 'tools\_sm-export-test.js')
 }
 Run-Step '发行包自检（16 个文件 SHA256）' {
-    & $ps -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'source-marker-united-1.2.0-alpha-r5\mpv-player\校验.ps1')
+    & $ps -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'source-marker-united-1.2.0-alpha-r6\mpv-player\校验.ps1')
 }
 Run-Step '读取方契约（用 Pr 真实解析段）' {
     & node (Join-Path $root 'tools\verify-import.js')

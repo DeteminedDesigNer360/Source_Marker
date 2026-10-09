@@ -26,3 +26,9 @@
 # Ctrl+DEL      script-binding source-markers/delete-nearest
 # Ctrl+e        script-binding source-markers/export-prompt
 # Ctrl+i        script-binding source-markers/import-prompt
+
+
+# —— 1.2.0「交织」标记模式提醒 ——
+# 标记模式（F10 开启）会接管 m / Shift+m / Ctrl+Shift+m / Del 这四个键。
+# 如果你在本文件里也绑了它们，你的绑定会盖掉模式（mpv 中 input.conf 优先级最高）——
+# 那时请删掉对应行，或改用 Ctrl+m / Alt+m 等既有快捷键。
