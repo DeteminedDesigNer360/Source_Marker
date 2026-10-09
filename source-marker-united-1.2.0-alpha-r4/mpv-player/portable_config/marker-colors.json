@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "source": "Pr 标记色 0..7 的真实色值（用户从 Pr 取色）",
+  "note": "两侧的唯一来源：mpv 侧直接读本文件（~~home/marker-colors.json）；Pr 面板侧读安装到扩展目录的同名副本。文件缺失时两侧各自退回内置表。参考色值只用于 OSD 与界面展示，不参与交换（文件里只有索引）。",
+  "colors": [
+    { "index": 0, "name": "绿", "hex": "718637" },
+    { "index": 1, "name": "红", "hex": "D22C36" },
+    { "index": 2, "name": "紫", "hex": "AF8BB1" },
+    { "index": 3, "name": "橙", "hex": "E96F24" },
+    { "index": 4, "name": "黄", "hex": "D0A12B" },
+    { "index": 5, "name": "白", "hex": "FFFFFF" },
+    { "index": 6, "name": "蓝", "hex": "428DFC" },
+    { "index": 7, "name": "青", "hex": "19F4D6" }
+  ]
+}

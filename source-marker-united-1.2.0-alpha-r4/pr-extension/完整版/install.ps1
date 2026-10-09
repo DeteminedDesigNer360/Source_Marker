@@ -119,6 +119,18 @@ if ($DryRun) {
     New-Item -ItemType Directory -Force -Path $target | Out-Null
     # 复制"内容"而不是目录本身，避免 PowerShell 的 目标\源目录名\ 嵌套陷阱
     Copy-Item (Join-Path $source '*') $target -Recurse -Force
+
+    # ①共享颜色表（1.2.0「交织」）：面板侧读扩展目录里的同名副本，
+    # 源在包内 mpv-player\portable_config\marker-colors.json（播放器直接读它）。
+    $colorSrc = Join-Path $here '..\..\mpv-player\portable_config\marker-colors.json'
+    if ($DryRun) {
+        Show-Plan '将拷贝共享颜色表' $colorSrc
+    } elseif (Test-Path $colorSrc) {
+        Copy-Item $colorSrc (Join-Path $target 'marker-colors.json') -Force
+        Write-Host '  [OK] 共享颜色表已就位（面板与播放器同一份色表）' -ForegroundColor Green
+    } else {
+        Write-Host '  [警告] 没找到共享颜色表 marker-colors.json —— 面板将退回内置色表' -ForegroundColor Yellow
+    }
     Write-Host '  文件已复制' -ForegroundColor Green
 }
 

@@ -75,15 +75,19 @@ local o = {
 opts.read_options(o, 'source-markers')
 
 -- Pr 标记色（索引与名称/近似色值一一对应；色值仅用于 OSD 显示）
+-- Pr 标记色 0..7（索引语义由契约 §4 冻结：绿红紫橙黄白蓝青）。
+-- 色值优先从**共享表** portable_config/marker-colors.json 读取（1.2.0「交织」①），
+-- 下面这份内置表是**回退**：共享表缺失/不完整时仍能正常工作。
+-- 这份回退必须与共享表一致 —— tools/_sm-export-test.js 里有守卫会盯着。
 local COLORS = {
-    [0] = { name = '绿', rgb = { 0x1F, 0xA8, 0x4C } },
-    [1] = { name = '红', rgb = { 0xE5, 0x48, 0x4D } },
-    [2] = { name = '紫', rgb = { 0x9B, 0x51, 0xE0 } },
-    [3] = { name = '橙', rgb = { 0xF2, 0x99, 0x4A } },
-    [4] = { name = '黄', rgb = { 0xF2, 0xC9, 0x4C } },
-    [5] = { name = '白', rgb = { 0xF2, 0xF2, 0xF2 } },
-    [6] = { name = '蓝', rgb = { 0x2F, 0x80, 0xED } },
-    [7] = { name = '青', rgb = { 0x56, 0xCC, 0xF2 } },
+    [0] = { name = '绿', rgb = { 0x71, 0x86, 0x37 } },
+    [1] = { name = '红', rgb = { 0xD2, 0x2C, 0x36 } },
+    [2] = { name = '紫', rgb = { 0xAF, 0x8B, 0xB1 } },
+    [3] = { name = '橙', rgb = { 0xE9, 0x6F, 0x24 } },
+    [4] = { name = '黄', rgb = { 0xD0, 0xA1, 0x2B } },
+    [5] = { name = '白', rgb = { 0xFF, 0xFF, 0xFF } },
+    [6] = { name = '蓝', rgb = { 0x42, 0x8D, 0xFC } },
+    [7] = { name = '青', rgb = { 0x19, 0xF4, 0xD6 } },
 }
 local function ass_color(i)
     local c = COLORS[i] or COLORS[1]
@@ -654,6 +658,46 @@ end
 ----------------------------------------------------------------------
 -- 状态存取
 ----------------------------------------------------------------------
+
+-- ①共享颜色表：读 portable_config/marker-colors.json 覆盖内置表。
+-- 只在**整表完整**（8 条、索引 0..7、hex 合法）时才采用，否则保留内置回退 ——
+-- 宁可用旧色，也不能因为一个坏文件让插件半死不活。
+local COLOR_TABLE_STATE = '内置回退表'
+local function hex_to_rgb(h)
+    if type(h) ~= 'string' then return nil end
+    h = h:gsub('^#', '')
+    if #h ~= 6 or h:match('^%x%x%x%x%x%x$') == nil then return nil end
+    return { tonumber(h:sub(1, 2), 16), tonumber(h:sub(3, 4), 16), tonumber(h:sub(5, 6), 16) }
+end
+local function apply_shared_colors()
+    local path = expand('~~home/marker-colors.json')
+    if not path or not file_exists(path) then
+        COLOR_TABLE_STATE = '内置回退表（共享表不存在）'
+        return
+    end
+    local text = read_file(path)
+    if not text then COLOR_TABLE_STATE = '内置回退表（共享表读不出）' return end
+    local ok, d = pcall(json_decode, text)
+    if not ok or type(d) ~= 'table' or type(d.colors) ~= 'table' then
+        COLOR_TABLE_STATE = '内置回退表（共享表解析失败）'
+        return
+    end
+    local fresh = {}
+    for _, c in ipairs(d.colors) do
+        local i = tonumber(c.index)
+        local rgb = hex_to_rgb(c.hex)
+        if not i or i < 0 or i > 7 or type(c.name) ~= 'string' or c.name == '' or not rgb then
+            COLOR_TABLE_STATE = '内置回退表（共享表有条目不合法）'
+            return
+        end
+        fresh[i] = { name = c.name, rgb = rgb }
+    end
+    for i = 0, 7 do
+        if not fresh[i] then COLOR_TABLE_STATE = '内置回退表（共享表缺索引 ' .. i .. '）' return end
+    end
+    COLORS = fresh
+    COLOR_TABLE_STATE = '共享表 ' .. path
+end
 
 local function sort_markers()
     table.sort(S.markers, function(a, b) return a.t < b.t end)
@@ -1670,6 +1714,10 @@ end
 load_ui_state()
 
 ----------------------------------------------------------------------
+-- ①共享颜色表：只读一次（改颜色表要重启 mpv，与"改配置要重启"一致）
+apply_shared_colors()
+msg.info('颜色表来源：' .. COLOR_TABLE_STATE)
+
 -- 脚本消息（外部工具 / 自动化测试用；与按钮、快捷键走同一批处理函数）
 ----------------------------------------------------------------------
 

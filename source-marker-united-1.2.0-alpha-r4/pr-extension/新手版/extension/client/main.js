@@ -680,7 +680,36 @@ var FILE_MARKERS = [];
 
 /* 标记颜色：参考色值取自格式文档 §4（只用于界面展示，不参与交换）。
    索引读不到（-1）时返回空串，回到默认文字色。 */
-var MARKER_COLORS = ['#1FA84C', '#E5484D', '#9B51E0', '#F2994A', '#F2C94C', '#F2F2F2', '#2F80ED', '#56CCF2'];
+var MARKER_COLORS = ['#718637', '#D22C36', '#AF8BB1', '#E96F24', '#D0A12B', '#FFFFFF', '#428DFC', '#19F4D6'];
+/* ①共享颜色表（1.2.0「交织」）：上面这份是**回退**，启动时会尝试从扩展目录读
+   marker-colors.json（安装器从包内 mpv-player\portable_config\ 拷进来）。
+   只有整表合法（8 条、索引 0..7、hex 合法）才采用，否则保留回退并在日志里说明原因。 */
+var COLOR_TABLE_STATE = '内置回退表';
+function loadSharedColors() {
+  try {
+    if (!window.cep || !window.cep.fs || typeof window.cep.fs.readFile !== 'function') {
+      COLOR_TABLE_STATE = '内置回退表（CEP 不支持读文件）'; return;
+    }
+    var dir = (typeof SystemPath !== 'undefined' && cs && typeof cs.getSystemPath === 'function')
+      ? cs.getSystemPath(SystemPath.EXTENSION) : '';
+    if (!dir) { COLOR_TABLE_STATE = '内置回退表（取不到扩展目录）'; return; }
+    var p = dir + '/marker-colors.json';
+    var r = window.cep.fs.readFile(p, window.cep.fs.UTF8);
+    if (!r || r.err !== 0 || !r.data) { COLOR_TABLE_STATE = '内置回退表（共享表读不出，err=' + (r ? r.err : 'null') + '）'; return; }
+    var d = JSON.parse(r.data);
+    var list = d && d.colors;
+    if (!list || list.length !== 8) { COLOR_TABLE_STATE = '内置回退表（共享表不是 8 条）'; return; }
+    var fresh = [];
+    for (var i = 0; i < list.length; i++) {
+      var n = Number(list[i].index), h = String(list[i].hex || '');
+      if (!(n >= 0 && n <= 7) || !/^[0-9A-Fa-f]{6}$/.test(h)) { COLOR_TABLE_STATE = '内置回退表（有条目不合法）'; return; }
+      fresh[n] = '#' + h.toUpperCase();
+    }
+    for (var k = 0; k < 8; k++) { if (!fresh[k]) { COLOR_TABLE_STATE = '内置回退表（共享表缺索引 ' + k + '）'; return; } }
+    MARKER_COLORS = fresh;
+    COLOR_TABLE_STATE = '共享表 ' + p;
+  } catch (e) { COLOR_TABLE_STATE = '内置回退表（' + e.message + '）'; }
+}
 function markerColorCss(idx) {
   var n = Number(idx);
   if (isNaN(n) || n < 0 || n > 7) return '';
@@ -1333,6 +1362,8 @@ on('btnImport', function () {
 /* ------------------------------ 启动 ------------------------------ */
 
 applySettings();
+loadSharedColors();
+log('颜色表来源：' + COLOR_TABLE_STATE);
 log('Source Marker 1.2.0-alpha r4 已就绪。');
 refresh().then(function () { return refreshExtAndPreview(); }).then(loadMarkers).then(function () {
   restartAuto();

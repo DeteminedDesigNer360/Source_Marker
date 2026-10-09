@@ -326,6 +326,32 @@ ok('契约别名：Lua 侧额外接受「正文」', luaAlias.indexOf('正文') 
   ALIAS_WORDS.forEach(w => ok('契约别名：' + v + '侧必须接受表头「' + w + '」', a.indexOf(w) >= 0, a));
 });
 
+/* ---------- ①共享颜色表：四方一致性守卫（JSON ↔ 契约 §4 ↔ Lua ↔ 两个面板） ---------- */
+const COLOR_JSON = path.join(PKG, 'mpv-player', 'portable_config', 'marker-colors.json');
+const colorDoc = JSON.parse(fs.readFileSync(COLOR_JSON, 'utf8'));
+const jHex = colorDoc.colors.map(c => String(c.hex).toUpperCase());
+eq('①颜色表：共享表有 8 条', jHex.length, 8);
+eq('①颜色表：共享表索引连续 0..7', colorDoc.colors.map(c => c.index).join(','), '0,1,2,3,4,5,6,7');
+
+const mdText = fs.readFileSync(path.join(PKG, 'mpv-player', '标记文件格式-v1.md'), 'utf8');
+const row = (mdText.match(/\| 参考色值 \|([^\n]+)/) || [])[1] || '';
+eq('①颜色表：契约 §4 的色值与共享表一致',
+   (row.match(/#[0-9A-Fa-f]{6}/g) || []).map(h => h.slice(1).toUpperCase()).join(','), jHex.join(','));
+
+const luaFallback = [];
+for (let i = 0; i < 8; i++) {
+  const m = luaDoc.match(new RegExp('\\[' + i + '\\] = \\{ name = [^,]+, rgb = \\{ 0x([0-9A-Fa-f]{2}), 0x([0-9A-Fa-f]{2}), 0x([0-9A-Fa-f]{2}) \\}'));
+  luaFallback.push(m ? (m[1] + m[2] + m[3]).toUpperCase() : '?');
+}
+eq('①颜色表：Lua 内置回退表与共享表一致', luaFallback.join(','), jHex.join(','));
+
+['新手版', '完整版'].forEach(v => {
+  const t = fs.readFileSync(path.join(PKG, 'pr-extension', v, 'extension', 'client', 'main.js'), 'utf8');
+  const arr = (t.match(/var MARKER_COLORS = \[([^\]]*)\]/) || [])[1] || '';
+  eq('①颜色表：' + v + '回退表与共享表一致',
+     (arr.match(/#[0-9A-Fa-f]{6}/g) || []).map(h => h.slice(1).toUpperCase()).join(','), jHex.join(','));
+});
+
 /* ---------- 汇总 ---------- */
 console.log('通过 ' + pass + ' 项，失败 ' + fail + ' 项');
 if (fail) { console.log('\n失败明细:'); fails.forEach(f => console.log('  ✗ ' + f)); process.exit(1); }
