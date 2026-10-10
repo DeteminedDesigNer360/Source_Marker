@@ -95,7 +95,9 @@ function readTextFile(path) {
 }
 
 /* ------------- 素材目录里的同名标记文件 -------------
- * 约定：mpv 插件把标记导出到**素材同目录**，文件名 `<素材名>_markers_<时间戳>.csv`。
+ * 约定：mpv 插件把标记导出到**素材同目录**。自 1.2.0-r8 起默认是**无戳**的
+ * `<素材名>_markers.csv`（Ctrl+E 覆盖）；Ctrl+Shift+E 另存为迭代时才带 `<时间戳>`。
+ * 面板侧自己的导出仍带时间戳（稍后统一）。
  * 面板早就从 smGetState 拿到了素材完整路径（item.getMediaPath），所以不需要新增约定，
  * 把这条路径用起来即可。
  * 目录列举用 CEP 自带的 fs.readdir（面板层），读文件仍走原来的 smReadTextFile（引擎）——
