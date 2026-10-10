@@ -19,8 +19,9 @@
       Alt+g           按序号跳转
       Alt+e           编辑离播放头最近的标记的正文（只改正文）
       Ctrl+DEL        删除离播放头最近的标记
-      Ctrl+e          导出标记（默认覆盖同名文件；回车用默认路径）
-    Ctrl+Shift+e    导出标记并带时间戳（另存为迭代，不覆盖）
+      Ctrl+e          直接导出标记（覆盖同名文件，不弹框）
+    Ctrl+Shift+e    直接导出标记并带时间戳（另存为迭代，不覆盖）
+    Ctrl+Alt+e    导出标记到指定路径（弹输入框）
       Ctrl+i          导入（CSV / TSV / JSON / SRT）
 
   关于 name 列：列按格式 v1 保留在表头里，但内容留空。
@@ -1817,13 +1818,19 @@ local function export_prompt(stamped)
         export_to(text)
     end)
 end
+-- 导出免回车：默认路径已经高度可预期，所以 Ctrl+E / Ctrl+Shift+E 直接落盘，不再弹框。
+-- 需要自己选路径时才用 Ctrl+Alt+E（保留原来的输入框）。
 register({ key = 'Ctrl+e', name = 'export-prompt', label = '导出标记',
-    help = '导出 CSV/JSON（覆盖同名文件；默认路径直接回车）' }, function()
-    export_prompt(false)
+    help = '直接导出（覆盖同名文件，不再弹框）' }, function()
+    export_to(default_export_path(false))
 end)
 register({ key = 'Ctrl+Shift+e', name = 'export-stamped', label = '导出标记（另存为迭代）',
-    help = '导出并带时间戳（不覆盖，保留每一次的版本）' }, function()
-    export_prompt(true)
+    help = '直接导出并带时间戳（不覆盖，保留每一次的版本）' }, function()
+    export_to(default_export_path(true))
+end)
+register({ key = 'Ctrl+Alt+e', name = 'export-as', label = '导出标记（指定路径）',
+    help = '弹出输入框，自己指定导出到哪个文件' }, function()
+    export_prompt(false)
 end)
 register({ key = 'Ctrl+i', name = 'import-prompt', label = '导入标记',
     help = '从文件导入标记（CSV / TSV / JSON / SRT）' }, function()
