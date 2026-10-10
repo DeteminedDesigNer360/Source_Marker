@@ -69,6 +69,7 @@ local o = {
     panel_bottom = 0,          -- 距底部像素；0 = 自动（抬到 mpv 进度条上方）
     hint = true,               -- 首次打开素材时提示「F1 帮助 / F2 按钮面板」
     hr_seek = true,            -- 跳转是否帧精确（false 时按关键帧跳）
+    nearest_window = 1.0,      -- 「最近标记」的判定半径（秒）；超出就提示附近没有（见 4(b) 修复）
     python = 'python',         -- 老版本 mpv 的输入框兜底解释器
     helper = '',               -- 自定义输入框脚本（留空用内置）
 }
@@ -949,13 +950,18 @@ local function head_time()
     return mp.get_property_number('time-pos')
 end
 
-local function nearest_index()
+-- 找离播放头最近的标记，但【只认 window 秒以内的】。
+-- 4(b) 修复：原先不限定范围 → 会一路搜到全局最近的标记，把很远的标记删掉/改掉（用户实测踩到）。
+-- 默认 1 秒（可用 script-opts=source-markers-nearest_window=秒 改）。
+local NEAREST_WINDOW = tonumber(o.nearest_window) or 1.0
+local function nearest_index(window)
     local head = head_time()
     if not head or #S.markers == 0 then return nil end
+    window = window or NEAREST_WINDOW
     local idx, best = nil, nil
     for i, m in ipairs(S.markers) do
         local d = math.abs(m.t - head)
-        if not best or d < best then idx, best = i, d end
+        if d <= window and (not best or d < best) then idx, best = i, d end
     end
     return idx
 end
@@ -1051,7 +1057,7 @@ end
 
 local function step_marker(delta)
     if #S.markers == 0 then
-        notify('还没有标记')
+        notify(string.format('附近 %g 秒内没有标记（当前共 %d 条）', NEAREST_WINDOW, #S.markers))
         return
     end
     local head = head_time() or 0
@@ -1073,7 +1079,7 @@ end
 local function delete_nearest()
     local idx = nearest_index()
     if not idx then
-        notify('还没有标记')
+        notify(string.format('附近 %g 秒内没有标记（当前共 %d 条）', NEAREST_WINDOW, #S.markers))
         return
     end
     local m = table.remove(S.markers, idx)
@@ -1094,7 +1100,7 @@ end
 local function edit_nearest(text)
     local idx = nearest_index()
     if not idx then
-        notify('还没有标记')
+        notify(string.format('附近 %g 秒内没有标记（当前共 %d 条）', NEAREST_WINDOW, #S.markers))
         return
     end
     local m = S.markers[idx]
@@ -1738,16 +1744,16 @@ register({ key = 'Alt+g', name = 'goto-prompt', label = '按序跳转',
     end
 end)
 register({ key = 'Alt+e', name = 'edit-nearest', label = '改正文',
-    help = '编辑离播放头最近的标记的正文' }, function()
+    help = '编辑离播放头最近的标记的正文（默认 ±1 秒内）' }, function()
     local idx = nearest_index()
-    if not idx then notify('还没有标记') return end
+    if not idx then notify(string.format('附近 %g 秒内没有标记（当前共 %d 条）', NEAREST_WINDOW, #S.markers)) return end
     ask_text('编辑正文（会成为 Pr 里的标记名）', S.markers[idx].comment or '', function(text)
         if text == nil then return end
         edit_nearest(text)
     end)
 end)
 register({ key = 'Ctrl+DEL', name = 'delete-nearest', label = '删除标记',
-    help = '删除离播放头最近的标记' }, delete_nearest)
+    help = '删除离播放头最近的标记（默认 ±1 秒内）' }, delete_nearest)
 register({ key = 'Ctrl+e', name = 'export-prompt', label = '导出标记',
     help = '导出 CSV/JSON（默认路径直接回车）' }, function()
     ask_text('导出到（回车用默认路径）', default_export_path(), function(text)
