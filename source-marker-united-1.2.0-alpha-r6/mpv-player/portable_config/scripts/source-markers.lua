@@ -1410,6 +1410,37 @@ local function visual_width(s)
     return n
 end
 
+-- 文本折行：先按显式 "\n" 切成段落，再按视觉宽度折（视觉宽度用上面的 visual_width 口径）。
+-- 4(c) 修复：帮助里有些说明比面板框还宽（F10 那条最明显），原先一行画出去会被裁掉/溢出。
+local function wrap_visual(s, max_units)
+    local out = {}
+    if max_units and max_units > 0 then
+        for para in (s .. '\n'):gmatch('([^\n]*)\n') do
+            local cur, curw, i = '', 0, 1
+            while i <= #para do
+                local b = para:byte(i)
+                local len, w = 1, 1
+                if b >= 0xF0 then len, w = 4, 2
+                elseif b >= 0xE0 then len, w = 3, 2
+                elseif b >= 0xC0 then len, w = 2, 2 end
+                local ch = para:sub(i, i + len - 1)
+                if curw + w > max_units and cur ~= '' then
+                    out[#out + 1] = cur
+                    cur, curw = ch, w
+                else
+                    cur = cur .. ch
+                    curw = curw + w
+                end
+                i = i + len
+            end
+            if cur ~= '' then out[#out + 1] = cur end
+        end
+    else
+        out[1] = s
+    end
+    if #out == 0 then out[1] = '' end
+    return out
+end
 local function show_help(state)
     UI.help = (state == nil) and (not UI.help) or (state == true)
     if not UI.help then
@@ -1423,11 +1454,20 @@ local function show_help(state)
     local x = math.max(SIDE_PADDING, math.floor(w * 0.16))
     local y = math.max(SIDE_PADDING, math.floor(h * 0.08))
     local box_w = math.min(w - 2 * x, math.floor(size * 34))
+    local col_x = x + math.floor(size * 8.2)
+    -- 文本列能用的"视觉宽度单位"（1 单位≈size/2 像素；中文字算 2 单位）
+    local text_units = math.max(8, math.floor(2 * (x - 12 + box_w - col_x) / size))
     local rows = {}
     for _, a in ipairs(ACTIONS) do
         if not a.compact then rows[#rows + 1] = a end     -- 颜色单独用一行汇总，列出 8 条太占地方
     end
-    local box_h = lh * (#rows + 4) + 16
+    local wrapped, row_lines = {}, 0
+    for ri, a in ipairs(rows) do
+        wrapped[ri] = wrap_visual(a.help, text_units)
+        row_lines = row_lines + #wrapped[ri]
+    end
+    local box_h = lh * (row_lines + 4) + 16
+    msg.verbose(string.format('帮助折行：文本列 %d 单位，共 %d 行（原先 %d 行）', text_units, row_lines, #rows))
     local lines = {
         rect_line(x - 12, y - 12, box_w, box_h, '&H1C1C1C&', '20'),
         text_line(x, y, size + 2, '&H4DE0FF&', 'Source Markers — 快捷键帮助', true),
@@ -1435,9 +1475,14 @@ local function show_help(state)
     local cy = y + lh
     lines[#lines + 1] = text_line(x, cy, size, '&HB0B0B0&', '鼠标党可以直接按 ' .. key_of('toggle-panel') .. ' 打开按钮面板，全部功能都能点。')
     cy = cy + lh
-    for _, a in ipairs(rows) do
+    for ri, a in ipairs(rows) do
         lines[#lines + 1] = text_line(x, cy, size, '&H4DE0FF&', string.format('%-10s', a.key))
-        lines[#lines + 1] = text_line(x + math.floor(size * 8.2), cy, size, '&HFFFFFF&', a.help)
+        local parts = wrapped[ri] or { a.help }
+        for pi, part in ipairs(parts) do
+            lines[#lines + 1] = text_line(col_x, cy, size, '&HFFFFFF&', part)
+            msg.verbose(string.format('帮助行 %s[%d/%d] 宽=%d：%s', a.key, pi, #parts, visual_width(part), part))
+            if pi < #parts then cy = cy + lh end
+        end
         cy = cy + lh
     end
     lines[#lines + 1] = text_line(x, cy, size, '&H4DE0FF&', string.format('%-10s', 'Ctrl+1..8'))
@@ -1775,7 +1820,7 @@ register({ key = 'F2', name = 'toggle-panel', label = '按钮面板',
     help = '显示 / 隐藏可点击的按钮面板（鼠标党的入口）' }, function() toggle_panel() end)
 
 register({ key = 'F10', name = 'marker-mode', label = '标记模式',
-    help = '开关标记模式：开启后 M 打标记 / Shift+M 下一个 / Ctrl+Shift+M 上一个 / Del 删除（右下角有小标）' }, function()
+    help = '开关标记模式：开启后 M 打标记 / Shift+M 下一个 /\nCtrl+Shift+M 上一个 / Del 删除（右下角有小标）' }, function()
     set_marker_mode()
 end)
 
