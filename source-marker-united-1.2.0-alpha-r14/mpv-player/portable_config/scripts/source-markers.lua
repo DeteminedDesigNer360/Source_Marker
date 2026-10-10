@@ -1771,10 +1771,22 @@ local function mode_bindings_apply(on)
     for _, spec in ipairs(all) do
         local bname = 'source-markers-mode-' .. spec.name   -- 两张表的名字本来就不重名（edit-* vs 其它）
         if on then
-            mp.add_key_binding(spec.key, bname, function() mode_dispatch(spec.name) end)
-            n = n + 1
+            -- 每个键单独 pcall：某个键名若不被 mpv 接受，不至于拖垮整批；失败会写进日志（便于诊断）
+            local ok, err = pcall(mp.add_key_binding, spec.key, bname,
+                                  function() mode_dispatch(spec.name) end)
+            if ok then n = n + 1
+            else log('绑定失败：key=%s name=%s err=%s', tostring(spec.key), bname, tostring(err)) end
+            -- 命名键再补一份大写规范写法（mpv 的 LEFT/ESC/DEL 那套）。单字符键跳过，
+            -- 否则 't' → 'T' 会变成 Shift+T，意思就不一样了。
+            local up = spec.key:upper()
+            if #spec.key > 1 and up ~= spec.key then
+                local ok2 = pcall(mp.add_key_binding, up, bname .. '-up',
+                                  function() mode_dispatch(spec.name) end)
+                if not ok2 then log('绑定失败（大写写法）：key=%s', up) end
+            end
         elseif type(mp.remove_key_binding) == 'function' then
-            mp.remove_key_binding(bname)
+            pcall(mp.remove_key_binding, bname)
+            pcall(mp.remove_key_binding, bname .. '-up')
             n = n + 1
         end
     end
@@ -2310,7 +2322,7 @@ mp.register_event('shutdown', function()
     save_ui_state()
 end)
 
-msg.info(string.format('source-markers 1.2.0-alpha r13 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
+msg.info(string.format('source-markers 1.2.0-alpha r14 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
     #ACTIONS, key_of('help'), key_of('toggle-panel'),
     tostring(o.sidecar), tostring(o.hide_sidecar), tostring(o.time_format),
     input and 'mp.input（播放器内输入框）' or 'python 兜底对话框'))
