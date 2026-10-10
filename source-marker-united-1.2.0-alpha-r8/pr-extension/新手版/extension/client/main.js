@@ -197,7 +197,7 @@ function saveSettings() {
     SET.srcMs = parseInt(document.getElementById('srcMs').value, 10) || 2000;
     SET.mkMs = parseInt(document.getElementById('mkMs').value, 10) || 5000;
     SET.autoMk = document.getElementById('autoMk').checked;
-    SET.followNudge = document.getElementById('followNudge').checked;
+    SET.followNudge = document.getElementById('followNudge').checked; SET.iterStamp = document.getElementById('iterStamp').checked;
     window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(SET));
   } catch (e) { log('设置保存失败: ' + e.message, 'err'); }
 }
@@ -209,7 +209,7 @@ function applySettings() {
   document.getElementById('srcMs').value = SET.srcMs || 2000;
   document.getElementById('mkMs').value = SET.mkMs || 5000;
   document.getElementById('autoMk').checked = SET.autoMk !== false;
-  document.getElementById('followNudge').checked = SET.followNudge !== false;
+  document.getElementById('followNudge').checked = SET.followNudge !== false; document.getElementById('iterStamp').checked = SET.iterStamp === true;
 }
 
 /* ------------------------------ 输出路径拼装 ------------------------------ */
@@ -1041,7 +1041,10 @@ function exportStamp() {
    真机实测：Pr 的 CEP **没有** window.cep.fs.showSaveDialog（日志原文：
    「此 CEP 版本没有 showSaveDialog」），所以不做存盘对话框 —— 直接、明确。 */
 function exportTargets() {
-  var name = safeFileName(stemOfPath(STATE.clipPath) || 'markers') + '_markers_' + exportStamp();
+  // 与 mpv 侧看齐：默认【无戳覆盖】同名文件；勾上「另存为迭代」才带时间戳（6plus）
+  var iterEl = document.getElementById('iterStamp');
+  var useStamp = !!(iterEl && iterEl.checked);
+  var name = safeFileName(stemOfPath(STATE.clipPath) || 'markers') + '_markers' + (useStamp ? '_' + exportStamp() : '');
   var list = [];
   var d1 = dirOfPath(STATE.clipPath);
   if (d1) list.push({ dir: d1, tag: '素材同目录' });
@@ -1114,6 +1117,10 @@ function exportMarkers() {
   });
 }
 on('btnExportMarkers', exportMarkers);
+on('iterStamp', function () {
+  saveSettings();
+  log('导出命名：' + (document.getElementById('iterStamp').checked ? '另存为迭代（带时间戳）' : '覆盖同名文件（默认）'));
+});
 
 function seekTo(sec) {
   callJSX('smSeekSeconds', sec).then(function (r) {

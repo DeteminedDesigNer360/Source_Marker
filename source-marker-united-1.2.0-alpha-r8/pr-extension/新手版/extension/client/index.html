@@ -78,6 +78,7 @@
   </div>
   <div class="row">
     <label><input id="clearFirst" type="checkbox"/> 导入前先清空已有标记</label>
+<label title="勾上后导出名带时间戳，保留每一次的版本；不勾则覆盖同名文件"><input id="iterStamp" type="checkbox"/> 导出时另存为迭代（带时间戳）</label>
     <span style="flex:1"></span>
     <label style="font-size:11px;color:var(--dim);display:flex;align-items:center;gap:3px;cursor:pointer" title="标记列表自己的自动刷新开关：源状态那一路关掉，这里照样刷。"><input id="autoMk" type="checkbox" checked/> 标记列表</label>
     <input id="mkMs" class="ms" type="number" min="300" max="60000" step="500" title="标记列表刷新间隔（毫秒，300–60000）"/>
