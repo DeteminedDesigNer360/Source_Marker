@@ -1110,6 +1110,14 @@ function exportMarkers() {
       log('已导出 ' + n + ' 条 → ' + t.list[i].tag + '：' + csvPath, 'ok');
       var e2 = cepWriteFile(base + '.json', jsonBody);
       log(e2 ? ('同名 JSON 写入失败: ' + e2) : ('已写入同名 JSON：' + base + '.json'), e2 ? 'err' : 'ok');
+      if (!e2) {
+        /* 默认把同名 json 设为隐藏（与 mpv 侧一致：减少目录里的视觉重复）。
+           走 ExtendScript 的 attrib；取不到 system.callSystem 就只记一条 warn，不隐藏也不影响功能。 */
+        callJSX('smHideFile', base + '.json').then(function (hr) {
+          log(hr.ok ? ('同名 JSON 已设为隐藏：' + base + '.json')
+                    : ('同名 JSON 未能隐藏（' + describe(hr) + '）—— 不影响使用'), hr.ok ? 'ok' : 'warn');
+        });
+      }
       var v1 = verifyExport(csvPath, n, false);
       log('回读校验 CSV → ' + v1, v1 === 'OK' ? 'ok' : 'err');
       if (!e2) {
