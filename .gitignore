@@ -15,3 +15,5 @@ _branch-work*/
 
 # 运行时状态：mpv 每次运行都会重写它（不是源码），不入库
 source-markers-ui.json
+_tmp/
+_tmp*

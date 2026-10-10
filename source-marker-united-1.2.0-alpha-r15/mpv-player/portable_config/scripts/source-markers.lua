@@ -1709,23 +1709,27 @@ local MODE_KEYS = {
     { key = 'm',            name = 'add',            label = '打标记' },
     { key = 'Shift+m',      name = 'next',           label = '下一个标记' },
     { key = 'Ctrl+Shift+m', name = 'prev',           label = '上一个标记' },
-    { key = 'Del',          name = 'delete-nearest', label = '删除标记' },
-    { key = 'Enter',        name = 'edit-enter',     label = '编辑当前标记' },
+    { key = 'DEL',          name = 'delete-nearest', label = '删除标记' },
 }
 
 local EDIT_KEYS = {
-    { key = 'Left',        name = 'edit-back1',      label = '-1 帧' },
-    { key = 'Right',       name = 'edit-fwd1',       label = '+1 帧' },
-    { key = 'Shift+Left',  name = 'edit-back10',     label = '-10 帧' },
-    { key = 'Shift+Right', name = 'edit-fwd10',      label = '+10 帧' },
+    { key = 'LEFT',        name = 'edit-back1',      label = '-1 帧' },
+    { key = 'RIGHT',       name = 'edit-fwd1',       label = '+1 帧' },
+    { key = 'SHIFT+LEFT',  name = 'edit-back10',     label = '-10 帧' },
+    { key = 'SHIFT+RIGHT', name = 'edit-fwd10',      label = '+10 帧' },
+    -- 备选：与 mpv 自带的逐帧键习惯一致（字符键的送达比方向键更可靠）
+    { key = ',',         name = 'edit-back1',      label = '-1 帧' },
+    { key = '.',         name = 'edit-fwd1',       label = '+1 帧' },
+    { key = '[',         name = 'edit-back10',     label = '-10 帧' },
+    { key = ']',         name = 'edit-fwd10',      label = '+10 帧' },
     { key = '1', name = 'edit-c1' }, { key = '2', name = 'edit-c2' },
     { key = '3', name = 'edit-c3' }, { key = '4', name = 'edit-c4' },
     { key = '5', name = 'edit-c5' }, { key = '6', name = 'edit-c6' },
     { key = '7', name = 'edit-c7' }, { key = '8', name = 'edit-c8' },
     { key = 't',     name = 'edit-text-t',     label = '改正文' },
-    { key = 'Enter', name = 'edit-text-enter', label = '改正文' },
-    { key = 'Del',   name = 'edit-del',        label = '删除这条' },
-    { key = 'Esc',   name = 'edit-exit',       label = '完成' },
+    { key = 'ENTER', name = 'edit-text-enter', label = '改正文' },
+    { key = 'DEL',   name = 'edit-del',        label = '删除这条' },
+    { key = 'ESC',   name = 'edit-exit',       label = '完成' },
 }
 local overlay_mode = new_overlay()
 
@@ -1735,16 +1739,14 @@ local overlay_mode = new_overlay()
 local EDIT_ACTION, MODE_ACTION = {}, {}
 for _, spec in ipairs(EDIT_KEYS) do EDIT_ACTION[spec.name] = true end
 for _, spec in ipairs(MODE_KEYS) do MODE_ACTION[spec.name] = true end
+-- Enter 一个键两种行为：不在编辑态=进编辑态；已在编辑态=改正文（所以它两边都要可用）
+MODE_ACTION['edit-text-enter'] = true
 
 local function mode_dispatch(name)
     local fn = HANDLERS[name]
     if not fn then msg.warn('标记模式：找不到动作 ' .. tostring(name)); return end
     local editing = UI.edit ~= nil
-    if name == 'edit-enter' then
-        msg.verbose('标记模式按键 → edit-enter')
-        if not editing then fn() end          -- 已在编辑态就是重复按，忽略
-        return
-    end
+
     if editing then
         if EDIT_ACTION[name] then
             msg.verbose('编辑态按键 → ' .. tostring(name))
@@ -1776,22 +1778,22 @@ local function mode_bindings_apply(on)
                                   function() mode_dispatch(spec.name) end)
             if ok then n = n + 1
             else log('绑定失败：key=%s name=%s err=%s', tostring(spec.key), bname, tostring(err)) end
-            -- 命名键再补一份大写规范写法（mpv 的 LEFT/ESC/DEL 那套）。单字符键跳过，
-            -- 否则 't' → 'T' 会变成 Shift+T，意思就不一样了。
-            local up = spec.key:upper()
-            if #spec.key > 1 and up ~= spec.key then
-                local ok2 = pcall(mp.add_key_binding, up, bname .. '-up',
-                                  function() mode_dispatch(spec.name) end)
-                if not ok2 then log('绑定失败（大写写法）：key=%s', up) end
-            end
+
         elseif type(mp.remove_key_binding) == 'function' then
             pcall(mp.remove_key_binding, bname)
-            pcall(mp.remove_key_binding, bname .. '-up')
             n = n + 1
         end
     end
     log('标记模式绑定：%s（处理 %d 个键；remove_key_binding=%s）',
         on and '已启用' or '已关闭', n, tostring(type(mp.remove_key_binding)))
+end
+local function edit_tc(t)
+    if not t then return "--:--:--:--" end
+    local fps = get_fps() or 25
+    local whole = math.floor(t)
+    local fr = math.floor((t - whole) * fps + 0.5)
+    if fr >= math.max(1, math.floor(fps)) then fr = 0 whole = whole + 1 end
+    return string.format('%s:%02d', os.date('!%H:%M:%S', whole), fr)
 end
 local function render_mode_badge()
     local w, h = osd_size()
@@ -1807,7 +1809,7 @@ local function render_mode_badge()
         local body = (m.comment and m.comment ~= '') and m.comment or '（空）'
         rows = {
             string.format('编辑标记 %s · 颜色 %s · 正文「%s」', edit_tc(m.t), color_name(m.color or 0), body),
-            '←/→ ±1帧 · Shift+←/→ ±10帧 · 1-8 改【这条】的颜色 · T/Enter 改正文 · Del 删除 · Esc 完成',
+            '←/→ 或 , / . ±1帧 · [ / ] ±10帧 · 1-8 改【这条】的颜色 · T/Enter 改正文 · Del 删除 · Esc 完成',
         }
         accent = '&H7CFF7C&'
     end
@@ -1833,14 +1835,6 @@ end
 -- ── 编辑态（B）：在标记模式里按 Enter，编辑播放头处那条标记 ─────────────
 -- 进态时把播放头吸到那条标记上（对应 Pr 里「双击标记跳过去」）；每次改动立即落盘。
 -- 语义区分：编辑态里的 1-8 改【这一条】的颜色；Ctrl+1..8 改的是「下一条新标记用什么色」。
-local function edit_tc(t)
-    if not t then return "--:--:--:--" end
-    local fps = get_fps() or 25
-    local whole = math.floor(t)
-    local fr = math.floor((t - whole) * fps + 0.5)
-    if fr >= math.max(1, math.floor(fps)) then fr = 0 whole = whole + 1 end
-    return string.format('%s:%02d', os.date('!%H:%M:%S', whole), fr)
-end
 
 local function edit_bindings_apply(on)
     local n = 0
@@ -1942,7 +1936,6 @@ local function edit_delete()
 end
 
 local function color_handler(i) return function() edit_set_color(i) end end
-HANDLERS['edit-enter']      = edit_enter
 HANDLERS['edit-exit']       = function() edit_exit(false) end
 HANDLERS['edit-back1']      = function() edit_move(-1) end
 HANDLERS['edit-fwd1']       = function() edit_move(1) end
@@ -1950,7 +1943,10 @@ HANDLERS['edit-back10']     = function() edit_move(-10) end
 HANDLERS['edit-fwd10']      = function() edit_move(10) end
 for i = 1, 8 do HANDLERS['edit-c' .. i] = color_handler(i) end
 HANDLERS['edit-text-t']     = edit_text
-HANDLERS['edit-text-enter'] = edit_text
+-- Enter：不在编辑态就进编辑态，已在编辑态就改正文（只绑一个键，避免后注册覆盖前注册）
+HANDLERS['edit-text-enter'] = function()
+    if UI.edit then edit_text() else edit_enter() end
+end
 HANDLERS['edit-del']        = edit_delete
 
 local function set_marker_mode(on, quiet)
@@ -2322,7 +2318,7 @@ mp.register_event('shutdown', function()
     save_ui_state()
 end)
 
-msg.info(string.format('source-markers 1.2.0-alpha r14 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
+msg.info(string.format('source-markers 1.2.0-alpha r15 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
     #ACTIONS, key_of('help'), key_of('toggle-panel'),
     tostring(o.sidecar), tostring(o.hide_sidecar), tostring(o.time_format),
     input and 'mp.input（播放器内输入框）' or 'python 兜底对话框'))
