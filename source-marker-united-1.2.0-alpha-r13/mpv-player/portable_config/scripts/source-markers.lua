@@ -1710,13 +1710,54 @@ local MODE_KEYS = {
     { key = 'Shift+m',      name = 'next',           label = '下一个标记' },
     { key = 'Ctrl+Shift+m', name = 'prev',           label = '上一个标记' },
     { key = 'Del',          name = 'delete-nearest', label = '删除标记' },
+    { key = 'Enter',        name = 'edit-enter',     label = '编辑当前标记' },
+}
+
+local EDIT_KEYS = {
+    { key = 'Left',        name = 'edit-back1',      label = '-1 帧' },
+    { key = 'Right',       name = 'edit-fwd1',       label = '+1 帧' },
+    { key = 'Shift+Left',  name = 'edit-back10',     label = '-10 帧' },
+    { key = 'Shift+Right', name = 'edit-fwd10',      label = '+10 帧' },
+    { key = '1', name = 'edit-c1' }, { key = '2', name = 'edit-c2' },
+    { key = '3', name = 'edit-c3' }, { key = '4', name = 'edit-c4' },
+    { key = '5', name = 'edit-c5' }, { key = '6', name = 'edit-c6' },
+    { key = '7', name = 'edit-c7' }, { key = '8', name = 'edit-c8' },
+    { key = 't',     name = 'edit-text-t',     label = '改正文' },
+    { key = 'Enter', name = 'edit-text-enter', label = '改正文' },
+    { key = 'Del',   name = 'edit-del',        label = '删除这条' },
+    { key = 'Esc',   name = 'edit-exit',       label = '完成' },
 }
 local overlay_mode = new_overlay()
 
+-- 注册时【一次性】把模式键与编辑键都绑上，运行时按状态路由。
+-- 不在这里来回增删绑定：从某个键自己的回调里 remove 掉它自己，会让后续 add 的绑定整体失效
+-- （真机现象：进编辑态后 16 个新绑定一个都不响应；对照：同一段代码在模式里工作正常）。
+local EDIT_ACTION, MODE_ACTION = {}, {}
+for _, spec in ipairs(EDIT_KEYS) do EDIT_ACTION[spec.name] = true end
+for _, spec in ipairs(MODE_KEYS) do MODE_ACTION[spec.name] = true end
+
 local function mode_dispatch(name)
-    msg.verbose('标记模式按键 → ' .. tostring(name))
     local fn = HANDLERS[name]
-    if fn then fn() else msg.warn('标记模式：找不到动作 ' .. tostring(name)) end
+    if not fn then msg.warn('标记模式：找不到动作 ' .. tostring(name)); return end
+    local editing = UI.edit ~= nil
+    if name == 'edit-enter' then
+        msg.verbose('标记模式按键 → edit-enter')
+        if not editing then fn() end          -- 已在编辑态就是重复按，忽略
+        return
+    end
+    if editing then
+        if EDIT_ACTION[name] then
+            msg.verbose('编辑态按键 → ' .. tostring(name))
+            fn()
+        else
+            msg.verbose('编辑态按键 → 忽略（模式键 ' .. tostring(name) .. '）')
+        end
+        return
+    end
+    if MODE_ACTION[name] then
+        msg.verbose('标记模式按键 → ' .. tostring(name))
+        fn()
+    end
 end
 -- 开=逐个 add_key_binding，关=逐个 remove_key_binding。
 -- 选这条而不是 section API，是因为**真机实测**过：add_key_binding 的绑定能盖过 mpv 内置键，
@@ -1724,8 +1765,11 @@ end
 -- 另外 add_key_binding 的返回值在旧 mpv 上是 nil，所以不能用 返回值:disable() 那套。
 local function mode_bindings_apply(on)
     local n = 0
-    for _, spec in ipairs(MODE_KEYS) do
-        local bname = 'source-markers-mode-' .. spec.name
+    local all = {}
+    for _, spec in ipairs(MODE_KEYS) do all[#all + 1] = spec end
+    for _, spec in ipairs(EDIT_KEYS) do all[#all + 1] = spec end
+    for _, spec in ipairs(all) do
+        local bname = 'source-markers-mode-' .. spec.name   -- 两张表的名字本来就不重名（edit-* vs 其它）
         if on then
             mp.add_key_binding(spec.key, bname, function() mode_dispatch(spec.name) end)
             n = n + 1
@@ -1739,24 +1783,167 @@ local function mode_bindings_apply(on)
 end
 local function render_mode_badge()
     local w, h = osd_size()
-    if not UI.mode or not w or not h then
+    if (not UI.mode and not UI.edit) or not w or not h then
         set_overlay(overlay_mode, nil, w, h)
         return
     end
     local size = math.max(14, math.floor(ui_font() * 0.85))
-    local text = '标记模式　F10 退出'
-    local bw = math.floor(#text * size * 0.95) + 18
-    local bh = size + 12
+    local rows = { '标记模式　F10 退出' }
+    local accent = '&H4DE0FF&'
+    if UI.edit then
+        local m = UI.edit
+        local body = (m.comment and m.comment ~= '') and m.comment or '（空）'
+        rows = {
+            string.format('编辑标记 %s · 颜色 %s · 正文「%s」', edit_tc(m.t), color_name(m.color or 0), body),
+            '←/→ ±1帧 · Shift+←/→ ±10帧 · 1-8 改【这条】的颜色 · T/Enter 改正文 · Del 删除 · Esc 完成',
+        }
+        accent = '&H7CFF7C&'
+    end
+    local unit_budget = math.max(16, math.floor((w - 90) / size))
+    local rows2 = {}
+    for _, r in ipairs(rows) do
+        for _, part in ipairs(wrap_visual(r, unit_budget)) do rows2[#rows2 + 1] = part end
+    end
+    local maxb = 0
+    for _, r in ipairs(rows2) do maxb = math.max(maxb, #r) end
+    local lh = math.floor(size * 1.25)
+    local bw = math.min(w - 40, math.floor(maxb * size * 0.72) + 20)
+    local bh = lh * #rows2 + 12
     local x = math.max(SIDE_PADDING, w - bw - 24)
     local y = math.max(SIDE_PADDING, h - bh - 24)
-    set_overlay(overlay_mode, {
-        rect_line(x, y, bw, bh, '&H000000&', '80'),
-        text_line(x + 9, y + 6, size, '&H4DE0FF&', text, true),
-    }, w, h)
+    local lines = { rect_line(x, y, bw, bh, '&H000000&', '80') }
+    for i, r in ipairs(rows2) do
+        lines[#lines + 1] = text_line(x + 9, y + 6 + (i - 1) * lh, size, accent, r, true)
+    end
+    set_overlay(overlay_mode, lines, w, h)
 end
+
+-- ── 编辑态（B）：在标记模式里按 Enter，编辑播放头处那条标记 ─────────────
+-- 进态时把播放头吸到那条标记上（对应 Pr 里「双击标记跳过去」）；每次改动立即落盘。
+-- 语义区分：编辑态里的 1-8 改【这一条】的颜色；Ctrl+1..8 改的是「下一条新标记用什么色」。
+local function edit_tc(t)
+    if not t then return "--:--:--:--" end
+    local fps = get_fps() or 25
+    local whole = math.floor(t)
+    local fr = math.floor((t - whole) * fps + 0.5)
+    if fr >= math.max(1, math.floor(fps)) then fr = 0 whole = whole + 1 end
+    return string.format('%s:%02d', os.date('!%H:%M:%S', whole), fr)
+end
+
+local function edit_bindings_apply(on)
+    local n = 0
+    for _, spec in ipairs(EDIT_KEYS) do
+        local bname = 'source-markers-edit-' .. spec.name
+        if on then
+            mp.add_key_binding(spec.key, bname, function() mode_dispatch(spec.name) end)
+            n = n + 1
+        elseif type(mp.remove_key_binding) == 'function' then
+            mp.remove_key_binding(bname)
+            n = n + 1
+        end
+    end
+    log('编辑态绑定：%s（处理 %d 个键）', on and '已启用' or '已关闭', n)
+end
+
+local function edit_follow()
+    local m = UI.edit
+    if m then mp.commandv('seek', string.format('%.3f', m.t), 'absolute+exact') end
+end
+
+
+local function edit_exit(quiet)
+    if not UI.edit then return end
+    UI.edit = nil                        -- 键位不动，回到模式路由
+    render_mode_badge()
+    if not quiet then notify(UI.mode and '已退出编辑态（仍在标记模式）' or '已退出编辑态') end
+end
+
+local function edit_enter()
+    if not UI.mode then notify('先按 F10 进标记模式，再用 Enter 编辑'); return end
+    if UI.edit then notify('已经在编辑态：Esc 完成'); return end
+    local idx = nearest_index()
+    if not idx then
+        notify(string.format('附近 %g 秒内没有标记（想新建按 M）', NEAREST_WINDOW))
+        return
+    end
+    local m = S.markers[idx]
+    UI.edit = m                          -- 键位不动：路由会切到编辑态
+    edit_follow()
+    render_mode_badge()
+    log('进入编辑态：t=%.3f color=%s comment=%s', m.t, tostring(m.color), tostring(m.comment))
+    notify(string.format('编辑标记 %s · 1-8 改这条的颜色 · T/Enter 改正文 · Esc 完成', edit_tc(m.t)))
+end
+
+local function edit_move(frames)
+    local m = UI.edit
+    if not m then return end
+    local fps = get_fps() or 25
+    local nt = m.t + frames / fps
+    if nt < 0 then nt = 0 end
+    local other = marker_at_same_frame(nt)
+    if other and S.markers[other] ~= m then
+        notify('那一帧已经有标记了（同一帧只能有一条）—— 没动')
+        return
+    end
+    m.t = nt
+    m.tc = edit_tc(nt)
+    sort_markers()
+    save_sidecar()
+    edit_follow()
+    render_mode_badge()
+    msg.verbose('编辑态：移动 %+d 帧 → %.3f', frames, nt)
+    notify(string.format('标记 → %s', m.tc))
+end
+
+local function edit_set_color(i)
+    local m = UI.edit
+    if not m then return end
+    m.color = i
+    save_sidecar()
+    render_mode_badge()
+    notify(string.format('这条标记的颜色 → %s', color_name(i)))
+end
+
+local function edit_text()
+    local m = UI.edit
+    if not m then return end
+    ask_text('这条标记的正文', m.comment or '', function(text)
+        if text == nil then return end
+        if UI.edit ~= m then return end
+        m.comment = trim(text)
+        save_sidecar()
+        render_mode_badge()
+        notify('正文已改：' .. ((m.comment ~= '') and m.comment or '（空）'))
+    end)
+end
+
+local function edit_delete()
+    local m = UI.edit
+    if not m then return end
+    for i, x in ipairs(S.markers) do
+        if x == m then table.remove(S.markers, i) break end
+    end
+    UI.edit = nil
+    save_sidecar()
+    render_mode_badge()
+    notify('已删除这条标记')
+end
+
+local function color_handler(i) return function() edit_set_color(i) end end
+HANDLERS['edit-enter']      = edit_enter
+HANDLERS['edit-exit']       = function() edit_exit(false) end
+HANDLERS['edit-back1']      = function() edit_move(-1) end
+HANDLERS['edit-fwd1']       = function() edit_move(1) end
+HANDLERS['edit-back10']     = function() edit_move(-10) end
+HANDLERS['edit-fwd10']      = function() edit_move(10) end
+for i = 1, 8 do HANDLERS['edit-c' .. i] = color_handler(i) end
+HANDLERS['edit-text-t']     = edit_text
+HANDLERS['edit-text-enter'] = edit_text
+HANDLERS['edit-del']        = edit_delete
 
 local function set_marker_mode(on, quiet)
     UI.mode = (on == nil) and (not UI.mode) or (on == true)
+    if not UI.mode and UI.edit then edit_exit(true) end      -- 关模式就别留着编辑态
     mode_bindings_apply(UI.mode)
     render_mode_badge()
     if not quiet then
@@ -2110,12 +2297,12 @@ end)
 --（这正是「列表能记住、F2 面板记不住」的唯一机制差异）。
 local last_overlay_at = 0
 mp.observe_property('time-pos', 'number', function()
-    if not S.show_list and not UI.panel and not UI.help and not UI.mode then return end
+    if not S.show_list and not UI.panel and not UI.help and not UI.mode and not UI.edit then return end
     local now = os.clock()
     if now - last_overlay_at < 0.2 then return end
     last_overlay_at = now
     if S.show_list then update_overlay() end
-    if (UI.panel or UI.help or UI.mode) and redraw_ui then redraw_ui() end
+    if (UI.panel or UI.help or UI.mode or UI.edit) and redraw_ui then redraw_ui() end
 end)
 
 mp.register_event('shutdown', function()
