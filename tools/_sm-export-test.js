@@ -13,7 +13,7 @@ const vm = require('vm');
 const path = require('path');
 
 const ROOT = path.join(__dirname, '..');   // 本文件在 tools/ 下；工作区根是上一级
-const MAIN = path.join(ROOT, 'source-marker-united-1.2.0-alpha-r8', 'pr-extension', '完整版', 'extension', 'client', 'main.js');
+const MAIN = path.join(ROOT, 'source-marker-united-1.2.0-alpha-r9', 'pr-extension', '完整版', 'extension', 'client', 'main.js');
 const src = fs.readFileSync(MAIN, 'utf8');
 
 let pass = 0, fail = 0;
@@ -234,7 +234,7 @@ eq('回归 bug#1：只读 desc 的老写法会丢正文（证明本测试确实�
 /* ---------- 11. 回归：「改正文 / 删标记」的定位逻辑（引擎的 _markerAt）----------
    这是"绝不盲操作"的核心：下标对不上就按时间找最近的，离所有标记都太远就拒绝。
    注意它是**只读**的 —— 定位过程本身绝不能动任何标记。 */
-const engPath = path.join(ROOT, 'source-marker-united-1.2.0-alpha-r8', 'pr-extension', '完整版', 'extension', 'host', 'hostscript.jsx');
+const engPath = path.join(ROOT, 'source-marker-united-1.2.0-alpha-r9', 'pr-extension', '完整版', 'extension', 'host', 'hostscript.jsx');
 const eng = fs.readFileSync(engPath, 'utf8');
 function fnSrc(name) {
   const i = eng.indexOf('function ' + name);
