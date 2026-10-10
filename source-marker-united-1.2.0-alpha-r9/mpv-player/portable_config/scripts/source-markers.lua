@@ -26,7 +26,7 @@
 
   关于 name 列：列按格式 v1 保留在表头里，但内容留空。
   Pr 面板的标记名只取「备注/comment 列」，name 列整列忽略，所以本插件不再生成 M01/M02 之类的
-  占位名；用户输入一律进 comment。自动保存的 *.marks.json 会带隐藏属性，避免误删误改。
+  占位名；用户输入一律进 comment。自动保存的 *.marks[mpv-autosave].json 会带隐藏属性，避免误删误改。
 
   可在 mpv.conf 里改路径与行为，例如：
       script-opts=source-markers-sidecar=yes
@@ -53,8 +53,8 @@ do
 end
 
 local o = {
-    sidecar = true,            -- 与视频同名的 .marks.json 自动保存
-    hide_sidecar = true,       -- 把自动保存的 .marks.json 设成隐藏文件（Windows；防误删/误改）
+    sidecar = true,            -- 与视频同名的 .marks[mpv-autosave].json 自动保存
+    hide_sidecar = true,       -- 把自动保存的 .marks[mpv-autosave].json 设成隐藏文件（Windows；防误删/误改）
     dir = '~~home/markers',    -- sidecar=false 时的存放目录
     default_color = 0,         -- 默认当前颜色（0 = 绿；与 Pr 的默认标记色一致）
     time_format = 'ms',        -- ms（规范默认）| ff | sec | auto
@@ -808,7 +808,7 @@ local function sidecar_path()
     local path = mp.get_property('path')
     if is_local_file(path) then
         local dir = dir_of(path) or '.'
-        S.sidecar = dir .. '\\' .. base_of(path) .. '.marks.json'
+        S.sidecar = dir .. '\\' .. base_of(path) .. '.marks[mpv-autosave].json'
         return S.sidecar
     end
     if path and path ~= '' then
@@ -817,7 +817,7 @@ local function sidecar_path()
             msg.warn('找不到可写的 sidecar 目录，已跳过 sidecar')
             return nil
         end
-        S.sidecar = dir .. '\\' .. safe_filename(base_of(mp.get_property('filename') or 'stream')) .. '.marks.json'
+        S.sidecar = dir .. '\\' .. safe_filename(base_of(mp.get_property('filename') or 'stream')) .. '.marks[mpv-autosave].json'
         return S.sidecar
     end
     return nil
@@ -850,18 +850,28 @@ end
 
 -- 选要载入的那个文件：sidecar 优先；若导出的标记文件存在且【比 sidecar 新】，则以它为准
 -- （谁后写谁算数 —— 这样"Pr 导出 → mpv 打开"就能看到 Pr 的版本）。
+-- 旧版 sidecar 名字（1.2.0-r10 之前叫 <素材名>.marks.json）。
+-- 只用来兜底读一次：读到了就照常用，下次保存会写到新名字下（用户不会因为改名丢标记）。
+local function legacy_sidecar_path()
+    local p = mp.get_property('path')
+    if not is_local_file(p) then return nil end
+    return (dir_of(p) or '.') .. '\\' .. base_of(p) .. '.marks.json'
+end
+
 local function pick_marker_file()
     local side, exp = sidecar_path(), exported_json_path()
     local has_side = side and file_exists(side)
     local has_exp = exp and file_exists(exp)
     if has_side and has_exp then
         local ms, me = file_mtime(side), file_mtime(exp)
-        if ms and me and me > ms then return exp, true end
-        return side, false
+        if ms and me and me > ms then return exp, 'export' end
+        return side, 'sidecar'
     end
-    if has_side then return side, false end
-    if has_exp then return exp, true end
-    return nil, false
+    if has_side then return side, 'sidecar' end
+    if has_exp then return exp, 'export' end
+    local leg = legacy_sidecar_path()
+    if leg and file_exists(leg) then return leg, 'legacy' end
+    return nil, nil
 end
 
 local function load_sidecar()
@@ -870,7 +880,7 @@ local function load_sidecar()
     -- 否则每次换素材都会把「显示列表」的选择抹掉。
     update_overlay()
     if not o.sidecar then return end          -- sidecar=no 时既不写也不读
-    local path, from_export = pick_marker_file()
+    local path, tag = pick_marker_file()
     if path then
         local text = read_file(path)
         local markers, skipped = {}, 0
@@ -881,7 +891,9 @@ local function load_sidecar()
             msg.warn(string.format('标记文件里有 %d 条无法解析的标记，已跳过', skipped))
             notify(string.format('跳过 %d 条坏标记', skipped))
         end
-        log('已载入 %d 个标记：%s%s', #S.markers, path, from_export and '（来自导出文件）' or '')
+        local tag_text = (tag == 'export') and '（来自导出文件）'
+            or ((tag == 'legacy') and '（旧版 sidecar，之后会写到新名字）' or '')
+        log('已载入 %d 个标记：%s%s', #S.markers, path, tag_text)
         if #S.markers > 0 then
             notify(string.format('已载入 %d 个标记', #S.markers))
         end

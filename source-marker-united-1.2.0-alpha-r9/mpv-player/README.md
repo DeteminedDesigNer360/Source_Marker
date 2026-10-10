@@ -48,7 +48,7 @@ mpv-player/
 
 - **描述就是 Pr 里的标记名**：Pr 面板的规则是 `标记名 = 备注列`，
   所以本插件不让用户往"名字"列写字 —— 那一列保留在文件里但**写空**（Pr 整列忽略它）。
-- 自动保存：与视频同名的 `*.marks.json`，每改一次就原子写入，并**设为隐藏文件**防误删。
+- 自动保存：与视频同名的 `*.marks[mpv-autosave].json`，每改一次就原子写入，并**设为隐藏文件**防误删。
 - 导出：`Ctrl+e` 写出 `.csv`（给 Pr / Excel）+ `.json`（无损，带 fps 与源文件信息）。
 - 导入：`Ctrl+i` 支持 CSV / TSV / JSON / SRT。
 
@@ -67,7 +67,7 @@ script-opts=source-markers-panel=yes,source-markers-time_format=ms,source-marker
 
 | 选项 | 默认 | 说明 |
 |---|---|---|
-| `sidecar` | `yes` | 是否自动保存同名 `*.marks.json` |
+| `sidecar` | `yes` | 是否自动保存同名 `*.marks[mpv-autosave].json` |
 | `hide_sidecar` | `yes` | 把 sidecar 设为隐藏文件（Windows） |
 | `time_format` | `ms` | `ms`（`HH:MM:SS.mmm`，与帧率无关）/ `ff`（`HH:MM:SS:FF`）/ `sec` / `auto` |
 | `csv_bom` | `yes` | 导出 CSV 带 UTF-8 BOM（Excel 友好；Pr 面板会剥掉） |
