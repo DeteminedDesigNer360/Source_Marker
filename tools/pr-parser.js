@@ -19,7 +19,7 @@ const START = '/* ------------------------------ 时间解析';
 const END = '/* ------------------------------ 状态刷新';
 
 function loadParser(mainJsPath) {
-  const file = mainJsPath || path.join(__dirname, '..', 'source-marker-united-1.2.0-alpha-r7', 'pr-extension', '完整版', 'extension', 'client', 'main.js');
+  const file = mainJsPath || path.join(__dirname, '..', 'source-marker-united-1.2.0-alpha-r8', 'pr-extension', '完整版', 'extension', 'client', 'main.js');
   const src = fs.readFileSync(file, 'utf8');
   const startAt = src.indexOf(START);
   const endAt = src.indexOf(END);
