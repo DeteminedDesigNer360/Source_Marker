@@ -39,22 +39,6 @@ function _ok() {
 }
 function _err(m) { return 'ERR' + US + String(m); }
 
-/* smHideFile：给文件加 Windows 隐藏属性（导出的同名 .json 用 —— 减少目录里的视觉重复）。
-   走 system.callSystem('attrib +h')；Pr 的 ExtendScript 里 system 不一定可用，
-   所以失败时如实返回原因，由面板记日志 —— 不隐藏也不影响功能。 */
-function smHideFile(path) {
-    try {
-        if (typeof system === 'undefined' || !system || typeof system.callSystem !== 'function') {
-            return _err('此 ExtendScript 环境没有 system.callSystem');
-        }
-        var p = String(path == null ? '' : path);
-        if (!p) return _err('空路径');
-        system.callSystem('attrib +h "' + p + '"');
-        return _ok();
-    } catch (e) {
-        return _err('attrib 失败: ' + (e && e.message ? e.message : e));
-    }
-}
 function _num(v, d) { var n = Number(v); return isNaN(n) ? d : n; }
 
 function _tc(t) {

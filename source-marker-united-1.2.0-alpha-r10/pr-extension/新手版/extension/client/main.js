@@ -1119,11 +1119,25 @@ function exportMarkers() {
       log(e2 ? ('同名 JSON 写入失败: ' + e2) : ('已写入同名 JSON：' + base + '.json'), e2 ? 'err' : 'ok');
       if (!e2) {
         /* 默认把同名 json 设为隐藏（与 mpv 侧一致：减少目录里的视觉重复）。
-           走 ExtendScript 的 attrib；取不到 system.callSystem 就只记一条 warn，不隐藏也不影响功能。 */
-        callJSX('smHideFile', base + '.json').then(function (hr) {
-          log(hr.ok ? ('同名 JSON 已设为隐藏：' + base + '.json')
-                    : ('同名 JSON 未能隐藏（' + describe(hr) + '）—— 不影响使用'), hr.ok ? 'ok' : 'warn');
-        });
+           真机实测：Pr 的 ExtendScript 里没有 system.callSystem，所以走 CEP 自己的 createProcess
+           去跑 attrib —— 这条通路「用播放器打开」已经在本机验证过可用。
+           仍然先检能力、再按 createProcess 的约定检查 err（r21 踩过"返回 err=3 其实没起来"）。 */
+        var jp = base + '.json';
+        if (!window.cep || !window.cep.process || typeof window.cep.process.createProcess !== 'function') {
+          log('同名 JSON 未能隐藏（此 CEP 版本没有 process.createProcess）—— 不影响使用', 'warn');
+        } else {
+          var cands = ['C:\\Windows\\System32\\attrib.exe', 'attrib.exe'], rawH = null, usedH = '';
+          for (var hi = 0; hi < cands.length; hi++) {
+            try {
+              rawH = window.cep.process.createProcess(cands[hi], '+h', '"' + jp + '"');
+              usedH = cands[hi];
+              log('隐藏尝试：' + usedH + ' → 返回 ' + JSON.stringify(rawH));
+              if (rawH && rawH.err === 0) break;
+            } catch (eh) { log('隐藏异常（' + cands[hi] + '）：' + eh.message, 'warn'); }
+          }
+          var hid = !!(rawH && rawH.err === 0);
+          log(hid ? ('同名 JSON 已设为隐藏：' + jp) : ('同名 JSON 未能隐藏 —— 不影响使用'), hid ? 'ok' : 'warn');
+        }
       }
       var v1 = verifyExport(csvPath, n, false);
       log('回读校验 CSV → ' + v1, v1 === 'OK' ? 'ok' : 'err');
