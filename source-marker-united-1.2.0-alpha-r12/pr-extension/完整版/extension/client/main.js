@@ -1123,11 +1123,18 @@ function exportMarkers() {
              —— 真机现象正是「返回 err=0（进程起来了）但文件属性没变」。
              cmd /c 能吃掉多余引号，也顺手解决带空格的路径。
              注意：createProcess 的 err=0 只说明【进程起来了】，不代表 attrib 干成了。 */
-          var rawH = null;
-          try {
-            rawH = window.cep.process.createProcess('cmd.exe', '/c', 'attrib', '+H', '"' + jp + '"');
-            log('隐藏尝试：cmd /c attrib +H "' + jp + '" → 返回 ' + JSON.stringify(rawH));
-          } catch (eh) { log('隐藏异常：' + eh.message, 'warn'); }
+          /* 真机踩过两次：
+             ① 直起 attrib.exe（绝对路径）→ err=0（进程起来了）但文件属性没变
+             ② 裸名 cmd.exe → err=3（进程根本没起来）—— CEP 的 createProcess 不查 PATH，
+                必须给绝对路径。
+             所以既给绝对路径、也留一个回退；err=0 仍只代表"起来了"，真正的结果请看目录。 */
+          var rawH = null, cmds = ['C:\\Windows\\System32\\cmd.exe', 'cmd.exe'];
+          for (var ci = 0; ci < cmds.length && !(rawH && rawH.err === 0); ci++) {
+            try {
+              rawH = window.cep.process.createProcess(cmds[ci], '/c', 'attrib', '+H', '"' + jp + '"');
+              log('隐藏尝试：' + cmds[ci] + ' /c attrib +H "' + jp + '" → 返回 ' + JSON.stringify(rawH));
+            } catch (eh) { log('隐藏异常（' + cmds[ci] + '）：' + eh.message, 'warn'); }
+          }
           var spawned = !!(rawH && rawH.err === 0);
           log(spawned ? ('已请求隐藏同名 JSON（请看一眼目录确认）：' + jp)
                       : ('同名 JSON 未能隐藏（进程都没起来）—— 不影响使用'), spawned ? 'ok' : 'warn');

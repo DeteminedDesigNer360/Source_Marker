@@ -899,10 +899,11 @@ local function load_sidecar()
         local tag_text = (tag == 'export') and '（来自导出文件）'
             or ((tag == 'legacy') and '（旧版 sidecar，之后会写到新名字）' or '')
         log('已载入 %d 个标记：%s%s', #S.markers, path, tag_text)
-        if tag == 'legacy' then
-            -- 从旧名字读到的：顺手写一份到新名字，迁移一次就完成（旧文件不删，只提示）
+        if tag ~= 'sidecar' then
+            -- 来源不是新名 sidecar（旧名 sidecar 或导出文件）→ 顺手把当前内容落到新名。
+            -- 这样下次打开就直接用新名；旧文件/导出文件都原样留着，不删。
             save_sidecar()
-            log('已把标记迁移到新名字：%s（旧文件 %s 可以自行删除）', sidecar_path() or '?', path)
+            log('已把当前标记落到新名字：%s（来源：%s）', sidecar_path() or '?', path)
         end
         if #S.markers > 0 then
             notify(string.format('已载入 %d 个标记', #S.markers))
