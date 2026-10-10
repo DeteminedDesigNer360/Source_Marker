@@ -124,15 +124,24 @@ function findMarkerCandidates() {
     return Promise.resolve({ err: '读取目录失败（err=' + (r && r.err) + '）: ' + dir });
   }
   var names = (r.data && r.data.length) ? r.data : [];
-  var prefix = stem + '_markers_';
+  /* 候选匹配：<stem>_markers.csv/.json（默认导出，无戳）与 <stem>_markers_<戳>.csv/.json（另存为迭代）。
+     注意结尾不再要求下划线 —— 否则 mpv 侧改用"无戳默认名"后会静默找不到。 */
+  var base = stem + '_markers';
+  var exactCsv = stem + '_markers.csv', exactJson = stem + '_markers.json';
   var hits = names.map(function (n) { return String(n); })
-    .filter(function (n) { return n.indexOf(prefix) === 0 && /\.(csv|json)$/i.test(n); })
+    .filter(function (n) { return n.indexOf(base) === 0 && /\.(csv|json)$/i.test(n); })
     .map(function (n) {
       // readdir 可能只给文件名、也可能给完整路径，两种都兜住
       var full = /^([a-zA-Z]:[\\\/]|[\\\/])/.test(n) ? n : dir + '\\' + n;
       return { name: n.replace(/^.*[\\\/]/, ''), full: full };
     })
-    .sort(function (a, b) { return a.name < b.name ? 1 : (a.name > b.name ? -1 : 0); });
+    .sort(function (a, b) {
+      // 无戳的那份优先（它就是最近一次"覆盖式"导出）；其余按名字倒序（时间戳的词典序 = 时间序）
+      var ra = (a.name === exactCsv || a.name === exactJson) ? 0 : 1;
+      var rb = (b.name === exactCsv || b.name === exactJson) ? 0 : 1;
+      if (ra !== rb) return ra - rb;
+      return a.name < b.name ? 1 : (a.name > b.name ? -1 : 0);
+    });
   var csv = hits.filter(function (h) { return /\.csv$/i.test(h.name); });
   return Promise.resolve({ dir: dir, stem: stem, total: hits.length, list: csv.length ? csv : hits });
 }
