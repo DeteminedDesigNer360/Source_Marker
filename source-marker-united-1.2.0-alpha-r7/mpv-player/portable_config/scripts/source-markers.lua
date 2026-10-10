@@ -19,7 +19,8 @@
       Alt+g           按序号跳转
       Alt+e           编辑离播放头最近的标记的正文（只改正文）
       Ctrl+DEL        删除离播放头最近的标记
-      Ctrl+e          导出（默认路径出现后可直接回车，或改成别的路径）
+      Ctrl+e          导出标记（默认覆盖同名文件；回车用默认路径）
+    Ctrl+Shift+e    导出标记并带时间戳（另存为迭代，不覆盖）
       Ctrl+i          导入（CSV / TSV / JSON / SRT）
 
   关于 name 列：列按格式 v1 保留在表头里，但内容留空。
@@ -70,6 +71,8 @@ local o = {
     hint = true,               -- 首次打开素材时提示「F1 帮助 / F2 按钮面板」
     hr_seek = true,            -- 跳转是否帧精确（false 时按关键帧跳）
     nearest_window = 1.0,      -- 「最近标记」的判定半径（秒）；超出就提示附近没有（见 4(b) 修复）
+    export_stamp = false,      -- 默认导出是否带时间戳（false = 覆盖同名文件；Ctrl+Shift+E 始终带戳）
+    hide_export_json = true,   -- 把导出的同名 .json 设成隐藏（减少目录里的视觉重复）
     python = 'python',         -- 老版本 mpv 的输入框兜底解释器
     helper = '',               -- 自定义输入框脚本（留空用内置）
 }
@@ -1240,8 +1243,10 @@ local function build_csv()
     return body
 end
 
-local function default_export_path()
-    local stamp = os.date('%Y%m%d-%H%M%S')
+-- 默认导出名：<素材名>_markers.csv（**不带时间戳** → 每次导出覆盖，好找、不堆积）。
+-- 需要"另存为迭代"时：Ctrl+Shift+E（始终带戳），或把 export_stamp 设成 yes（默认也带戳）。
+local function default_export_path(stamp)
+    if stamp == nil then stamp = (o.export_stamp == true) end
     local path = mp.get_property('path')
     local dir
     if is_local_file(path) then
@@ -1250,8 +1255,11 @@ local function default_export_path()
         dir = resolve_dir(o.dir)
     end
     if not dir then dir = os.getenv('TEMP') or '.' end
-    local base = base_of(mp.get_property('filename') or 'markers')
-    return string.format('%s\\%s_markers_%s.csv', dir, safe_filename(base), stamp)
+    local base = safe_filename(base_of(mp.get_property('filename') or 'markers'))
+    if stamp then
+        return string.format('%s\\%s_markers_%s.csv', dir, base, os.date('%Y%m%d-%H%M%S'))
+    end
+    return string.format('%s\\%s_markers.csv', dir, base)
 end
 
 local function export_to(path)
@@ -1275,8 +1283,10 @@ local function export_to(path)
         return
     end
     local ok2 = write_file_atomic(json_path, json_encode(export_doc()))
+    if ok2 and o.hide_export_json then hide_file(json_path) end   -- 默认隐藏，减少目录里的视觉重复
     S.last_export = csv_path
-    notify(string.format('已导出 %d 个标记 → %s', #S.markers, csv_path))
+    notify(string.format('已导出 %d 个标记 → %s%s', #S.markers, csv_path,
+        o.hide_export_json and '（同名 .json 已设为隐藏）' or ''))
     log('导出 CSV: %s (JSON: %s, ok=%s)', csv_path, json_path, tostring(ok2))
 end
 
@@ -1799,13 +1809,21 @@ register({ key = 'Alt+e', name = 'edit-nearest', label = '改正文',
 end)
 register({ key = 'Ctrl+DEL', name = 'delete-nearest', label = '删除标记',
     help = '删除离播放头最近的标记（默认 ±1 秒内）' }, delete_nearest)
-register({ key = 'Ctrl+e', name = 'export-prompt', label = '导出标记',
-    help = '导出 CSV/JSON（默认路径直接回车）' }, function()
-    ask_text('导出到（回车用默认路径）', default_export_path(), function(text)
+-- 导出两种：默认覆盖同名文件（好找、不堆积）；Ctrl+Shift+E 带时间戳另存（保留每一次的版本）
+local function export_prompt(stamped)
+    ask_text('导出到（回车用默认路径）', default_export_path(stamped), function(text)
         if text == nil then return end
-        if trim(text) == '' then text = default_export_path() end
+        if trim(text) == '' then text = default_export_path(stamped) end
         export_to(text)
     end)
+end
+register({ key = 'Ctrl+e', name = 'export-prompt', label = '导出标记',
+    help = '导出 CSV/JSON（覆盖同名文件；默认路径直接回车）' }, function()
+    export_prompt(false)
+end)
+register({ key = 'Ctrl+Shift+e', name = 'export-stamped', label = '导出标记（另存为迭代）',
+    help = '导出并带时间戳（不覆盖，保留每一次的版本）' }, function()
+    export_prompt(true)
 end)
 register({ key = 'Ctrl+i', name = 'import-prompt', label = '导入标记',
     help = '从文件导入标记（CSV / TSV / JSON / SRT）' }, function()
