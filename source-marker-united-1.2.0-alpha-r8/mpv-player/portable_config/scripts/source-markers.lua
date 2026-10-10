@@ -836,24 +836,52 @@ local function save_sidecar()
     end
 end
 
+-- 面板/mpv 导出出来的标记文件（<素材名>_markers.json）。
+-- 只认 sidecar 的话，Pr 面板导出之后 mpv 打开同一个素材是看不到的（用户实测反馈）。
+local function exported_json_path()
+    local p = mp.get_property('path')
+    if not is_local_file(p) then return nil end
+    return (dir_of(p) or '.') .. '\\' .. base_of(p) .. '_markers.json'
+end
+local function file_mtime(path)
+    local info = utils.file_info and utils.file_info(path) or nil
+    return info and info.mtime or nil
+end
+
+-- 选要载入的那个文件：sidecar 优先；若导出的标记文件存在且【比 sidecar 新】，则以它为准
+-- （谁后写谁算数 —— 这样"Pr 导出 → mpv 打开"就能看到 Pr 的版本）。
+local function pick_marker_file()
+    local side, exp = sidecar_path(), exported_json_path()
+    local has_side = side and file_exists(side)
+    local has_exp = exp and file_exists(exp)
+    if has_side and has_exp then
+        local ms, me = file_mtime(side), file_mtime(exp)
+        if ms and me and me > ms then return exp, true end
+        return side, false
+    end
+    if has_side then return side, false end
+    if has_exp then return exp, true end
+    return nil, false
+end
+
 local function load_sidecar()
     S.markers = {}
     -- show_list 不在这里重置：它由界面状态文件持久化（见 load_ui_state），
     -- 否则每次换素材都会把「显示列表」的选择抹掉。
     update_overlay()
     if not o.sidecar then return end          -- sidecar=no 时既不写也不读
-    local path = sidecar_path()
-    if path and file_exists(path) then
+    local path, from_export = pick_marker_file()
+    if path then
         local text = read_file(path)
         local markers, skipped = {}, 0
         if text then markers, skipped = parse_marker_file(text, get_fps()) end
         S.markers = markers
         sort_markers()
         if skipped > 0 then
-            msg.warn(string.format('sidecar 里有 %d 条无法解析的标记，已跳过', skipped))
-            notify(string.format('sidecar 跳过 %d 条坏标记', skipped))
+            msg.warn(string.format('标记文件里有 %d 条无法解析的标记，已跳过', skipped))
+            notify(string.format('跳过 %d 条坏标记', skipped))
         end
-        log('已载入 %d 个标记：%s', #S.markers, path)
+        log('已载入 %d 个标记：%s%s', #S.markers, path, from_export and '（来自导出文件）' or '')
         if #S.markers > 0 then
             notify(string.format('已载入 %d 个标记', #S.markers))
         end

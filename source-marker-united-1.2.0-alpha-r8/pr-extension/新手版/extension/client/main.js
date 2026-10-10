@@ -1053,7 +1053,19 @@ function exportTargets() {
   return { name: name, list: list };
 }
 
+function cepDeleteQuiet(path) {
+  try {
+    if (window.cep && window.cep.fs && typeof window.cep.fs.deleteFile === 'function') {
+      window.cep.fs.deleteFile(path);
+    }
+    return true;
+  } catch (e) { return false; }
+}
 function cepWriteFile(path, data) {
+  /* 先删掉同名旧文件再写：真机踩到过 —— 目标 json 若是 mpv 侧留下的【隐藏】文件，
+     CEP 的 writeFile 会直接失败（日志原文：同名 JSON 写入失败: writeFile err=6）。
+     删除对隐藏文件是有效的，所以「先删后写」比直接覆盖稳。 */
+  cepDeleteQuiet(path);
   try {
     if (!window.cep || !window.cep.fs || typeof window.cep.fs.writeFile !== 'function') return 'CEP 不支持写文件';
     var enc = window.cep.fs.UTF8;
