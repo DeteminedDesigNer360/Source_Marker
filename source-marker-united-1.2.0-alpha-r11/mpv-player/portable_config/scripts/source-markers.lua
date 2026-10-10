@@ -902,7 +902,7 @@ local function load_sidecar()
         if tag == 'legacy' then
             -- 从旧名字读到的：顺手写一份到新名字，迁移一次就完成（旧文件不删，只提示）
             save_sidecar()
-            msg.info('已把标记迁移到新名字：%s（旧文件 %s 可以自行删除）', sidecar_path() or '?', path)
+            log('已把标记迁移到新名字：%s（旧文件 %s 可以自行删除）', sidecar_path() or '?', path)
         end
         if #S.markers > 0 then
             notify(string.format('已载入 %d 个标记', #S.markers))
