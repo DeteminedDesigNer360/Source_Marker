@@ -1119,17 +1119,18 @@ function exportMarkers() {
         if (!window.cep || !window.cep.process || typeof window.cep.process.createProcess !== 'function') {
           log('同名 JSON 未能隐藏（此 CEP 版本没有 process.createProcess）—— 不影响使用', 'warn');
         } else {
-          var cands = ['C:\\Windows\\System32\\attrib.exe', 'attrib.exe'], rawH = null, usedH = '';
-          for (var hi = 0; hi < cands.length; hi++) {
-            try {
-              rawH = window.cep.process.createProcess(cands[hi], '+h', '"' + jp + '"');
-              usedH = cands[hi];
-              log('隐藏尝试：' + usedH + ' → 返回 ' + JSON.stringify(rawH));
-              if (rawH && rawH.err === 0) break;
-            } catch (eh) { log('隐藏异常（' + cands[hi] + '）：' + eh.message, 'warn'); }
-          }
-          var hid = !!(rawH && rawH.err === 0);
-          log(hid ? ('同名 JSON 已设为隐藏：' + jp) : ('同名 JSON 未能隐藏 —— 不影响使用'), hid ? 'ok' : 'warn');
+          /* 走 cmd 一层：attrib 直起时，若 CEP 再给参数加一层引号，路径就废了
+             —— 真机现象正是「返回 err=0（进程起来了）但文件属性没变」。
+             cmd /c 能吃掉多余引号，也顺手解决带空格的路径。
+             注意：createProcess 的 err=0 只说明【进程起来了】，不代表 attrib 干成了。 */
+          var rawH = null;
+          try {
+            rawH = window.cep.process.createProcess('cmd.exe', '/c', 'attrib', '+H', '"' + jp + '"');
+            log('隐藏尝试：cmd /c attrib +H "' + jp + '" → 返回 ' + JSON.stringify(rawH));
+          } catch (eh) { log('隐藏异常：' + eh.message, 'warn'); }
+          var spawned = !!(rawH && rawH.err === 0);
+          log(spawned ? ('已请求隐藏同名 JSON（请看一眼目录确认）：' + jp)
+                      : ('同名 JSON 未能隐藏（进程都没起来）—— 不影响使用'), spawned ? 'ok' : 'warn');
         }
       }
       var v1 = verifyExport(csvPath, n, false);
