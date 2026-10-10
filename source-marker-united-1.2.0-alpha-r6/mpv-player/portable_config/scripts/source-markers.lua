@@ -960,12 +960,46 @@ local function nearest_index()
     return idx
 end
 
+-- 同一帧不重复打标记：Pr 一个帧位只有一条标记。
+-- 用"帧号"而不是秒来比较，避免浮点误差；帧号取离它最近的整帧。
+local function frame_of(t, fps)
+    if not t then return nil end
+    fps = fps or get_fps() or 25
+    if fps <= 0 then return nil end
+    return math.floor(t * fps + 0.5)
+end
+
+local function marker_at_same_frame(t)
+    local f = frame_of(t)
+    if f == nil then return nil end
+    for i, m in ipairs(S.markers) do
+        if frame_of(m.t) == f then return i end
+    end
+    return nil
+end
+
 -- 用户输入一律作为「正文」写进 comment 列，name 列留空。
 -- Pr 面板的标记名只取「备注/comment 列」、name 列整列忽略，所以这里不生成任何占位名。
 local function add_marker(comment)
     local t = head_time()
     if not t then
         notify('没有正在播放的文件')
+        return
+    end
+    local dup = marker_at_same_frame(t)
+    if dup then
+        local text = comment and trim(comment) or ''
+        if text ~= '' then
+            S.markers[dup].comment = text
+            save_sidecar()
+            if S.show_list then update_overlay() end
+            notify(string.format('此处已有标记，已更新正文：%s', text))
+            log('同帧更新正文: t=%.3f comment=%s', S.markers[dup].t, text)
+        else
+            notify(string.format('此处已有标记（%s，同一帧不重复打）',
+                to_timecode(S.markers[dup].t, get_fps() or 25)))
+            log('同帧重复被忽略: t=%.3f', t)
+        end
         return
     end
     local m = {
@@ -1662,7 +1696,7 @@ local function register(action, handler)
 end
 
 register({ key = 'Ctrl+m', name = 'add', label = '打标记',
-    help = '在播放头打一个标记（用当前颜色）' }, function() add_marker(nil) end)
+    help = '在播放头打一个标记（用当前颜色）；同一帧不会重复打' }, function() add_marker(nil) end)
 
 register({ key = 'Alt+m', name = 'add-prompt', label = '打标记 + 正文',
     help = '打标记并输入正文 —— 正文会成为 Pr 里的标记名' }, function()
