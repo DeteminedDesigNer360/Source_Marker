@@ -1393,7 +1393,7 @@ on('btnImport', function () {
 applySettings();
 loadSharedColors();
 log('颜色表来源：' + COLOR_TABLE_STATE);
-log('Source Marker 1.2.0-alpha r9 已加载。');
+log('Source Marker 1.2.0-alpha r10 已加载。');
 refresh().then(loadMarkers).then(function () {
   restartAuto();
 });
