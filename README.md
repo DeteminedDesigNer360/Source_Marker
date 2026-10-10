@@ -1,13 +1,13 @@
 # Source Marker 工作区
 
 这是 **Source Marker 的开发工作区**，不是发行版本身。
-发行版在 `source-marker-united-1.2.0-alpha-r6/`，它的内容与 GitHub 上 `main` 分支一一对应。
+发行版在 `source-marker-united-1.2.0-alpha-r7/`，它的内容与 GitHub 上 `main` 分支一一对应。
 
 ## 目录
 
 | 路径 | 是什么 |
 |---|---|
-| `source-marker-united-1.2.0-alpha-r6/` | **发行包**（Pr 面板 + mpv 播放器 + 许可与文档）。双击包里的 `安装.cmd` 安装。 |
+| `source-marker-united-1.2.0-alpha-r7/` | **发行包**（Pr 面板 + mpv 播放器 + 许可与文档）。双击包里的 `安装.cmd` 安装。 |
 | `docs/` | 标记格式的可机器读版本（JSON Schema）、契约样例、面板截图。 |
 | `tools/` | 开发与验证工具：锚点解析、BOM 检查、契约与漂移回归、来源取证、离线测试套件。 |
 | `参考视频/` | 冻结标记格式时用的参考素材与实测记录。 |
