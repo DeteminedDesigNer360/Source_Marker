@@ -1141,24 +1141,35 @@ function exportMarkers() {
           }
           function readback(tag) {
             var raw = null;
-            try { raw = window.cep.fs.readFile(logFile); } catch (e) { finish(false, tag + ' ｜ 读不到输出文件：' + e.message); return; }
-            var txt = (raw && raw.data) ? String(raw.data).replace(/[\r\n\s]+$/, '') : '';
-            finish(/(^|[ \t])H([ \t]|$)/.test(txt), tag + ' ｜ attrib 输出：' + (txt || '（空）'));
+            try { raw = window.cep.fs.readFile(logFile); }
+            catch (e) { finish(false, tag + ' ｜ 读日志抛异常：' + e.message); return; }
+            // 区分"文件不存在（命令压根没跑）"与"文件是空的（跑了但没输出）" —— 上一轮
+            // 我把两者混成一个"（空）"，白丢了一次关键信息。
+            if (!raw || (typeof raw.err !== 'undefined' && raw.err !== 0)) {
+              finish(false, tag + ' ｜ 日志文件不存在 ⇒ 命令没执行（CEP 参数拼接问题）raw=' + JSON.stringify(raw));
+              return;
+            }
+            var txt = String(raw.data || '').replace(/[\r\n\s]+$/, '');
+            finish(/(^|[ \t])H([ \t]|$)/.test(txt), tag + ' ｜ attrib 输出：' + (txt || '（文件是空的）'));
           }
           if (!window.cep || !window.cep.process || typeof window.cep.process.createProcess !== 'function') {
             log('同名 JSON 未能隐藏（此 CEP 版本没有 process.createProcess）—— 不影响使用', 'warn');
             return;
           }
           var cmdExe = 'C:\\Windows\\System32\\cmd.exe';
-          // 关键：整条命令作为【一个】参数传给 cmd /c（等价于 mpv 的 os.execute）
-          //       末尾再用不带 +h 的 attrib 把属性打出来，作为独立回读确认。
-          var one = '/c attrib +h "' + jp + '" > "' + logFile + '" 2>&1 & attrib "' + jp + '" >> "' + logFile + '"';
+          // 【关键】/c 必须单独作为第一个参数，命令整串作为第二个参数 —— 这才等价于
+          //   mpv 的 os.execute('attrib +h "…" 2>nul')（即 cmd /c <整串>）。
+          //   r22 的写法把 /c 放进了那个字符串里 → CEP 给含空格的参数整体加引号后，
+          //   cmd 把 "/c attrib …" 当成"带引号的程序名" → 找不到 → 进程起来了但什么都没做
+          //   （日志文件都没生成 ⇒ 面板日志显示 attrib 输出：（空））。
+          //   末尾再用不带 +h 的 attrib 打出属性，作为独立回读确认。
+          var inner = 'attrib +h "' + jp + '" > "' + logFile + '" 2>&1 & attrib "' + jp + '" >> "' + logFile + '"';
           var r = null;
           try {
-            r = window.cep.process.createProcess(cmdExe, one);
-            log('隐藏尝试：cmd /c（整串一个参数）→ 返回 ' + JSON.stringify(r));
-          } catch (e) { log('隐藏异常（cmd /c 整串）：' + e.message, 'warn'); }
-          if (r && r.err === 0) { setTimeout(function () { readback('cmd /c 整串'); }, 800); }
+            r = window.cep.process.createProcess(cmdExe, '/c', inner);
+            log('隐藏尝试：createProcess(cmd.exe, "/c", <命令整串>) → 返回 ' + JSON.stringify(r));
+          } catch (e) { log('隐藏异常（cmd /c + 命令整串）：' + e.message, 'warn'); }
+          if (r && r.err === 0) { setTimeout(function () { readback('cmd /c + 命令整串'); }, 900); }
           else { log('同名 JSON 未能隐藏（进程都没起来）—— 不影响使用', 'warn'); }
         })();
       }
