@@ -19,7 +19,7 @@ const START = '/* ------------------------------ 时间解析';
 const END = '/* ------------------------------ 状态刷新';
 
 function loadParser(mainJsPath) {
-  const file = mainJsPath || path.join(__dirname, '..', 'source-marker-united-1.2.0-alpha-r36', 'pr-extension', '完整版', 'extension', 'client', 'main.js');
+  const file = mainJsPath || path.join(__dirname, '..', 'source-marker-united-1.2.0-alpha-r37', 'pr-extension', '完整版', 'extension', 'client', 'main.js');
   const src = fs.readFileSync(file, 'utf8');
   const startAt = src.indexOf(START);
   const endAt = src.indexOf(END);
@@ -31,7 +31,7 @@ function loadParser(mainJsPath) {
   const sandbox = { log: function () {}, console: console, US: '\u001f' };
   vm.createContext(sandbox);
   vm.runInContext(parserCode, sandbox, { filename: 'main.js#parser' });
-  const want = ['parseMarkerFile', 'secondsToTimecode', 'parseTimeToSeconds'];
+  const want = ['parseMarkerFile', 'secondsToTimecode', 'parseTimeToSeconds', 'parseInout'];
   for (const name of want) {
     if (typeof sandbox[name] !== 'function') {
       throw new Error('解析段里没有导出 ' + name);
@@ -42,6 +42,7 @@ function loadParser(mainJsPath) {
     parseMarkerFile: sandbox.parseMarkerFile,
     secondsToTimecode: sandbox.secondsToTimecode,
     parseTimeToSeconds: sandbox.parseTimeToSeconds,
+    parseInout: sandbox.parseInout,
     // 宿主 payload 构造器（同一段代码里，返回的是 US 分隔的行）
     buildImportPayload: typeof sandbox.buildImportPayload === 'function' ? sandbox.buildImportPayload : null,
     US: '\u001f',

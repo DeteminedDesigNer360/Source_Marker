@@ -12,9 +12,10 @@
 const path = require('path');
 const { loadParser } = require('./pr-parser.js');
 
-const MAIN_JS = path.join(__dirname, '..', 'source-marker-united-1.2.0-alpha-r36', 'pr-extension', '完整版', 'extension', 'client', 'main.js');
+const MAIN_JS = path.join(__dirname, '..', 'source-marker-united-1.2.0-alpha-r37', 'pr-extension', '完整版', 'extension', 'client', 'main.js');
 const parser = loadParser(MAIN_JS);
 const parseMarkerFile = parser.parseMarkerFile;
+const parseInout = parser.parseInout;
 const secondsToTimecode = parser.secondsToTimecode;
 console.log('已加载 Pr 侧真实解析器：main.js#parser（' + parser.code.length + ' 字符）\n');
 
@@ -135,6 +136,17 @@ check('JSON v1 结构（含 source 元数据）',
   check('坏 JSON 不抛异常且解析为 0 条（' + c[1] + '）', [threw, got && got.length], [false, 0]);
 });
 
+/* ---------- 用例 15：出入点可选字段 inout 的读取（1.2.0 第 7 条） ----------
+   契约要求读取方容忍三种情形：字段缺失 / 只给一个端点 / 端点为 null。 */
+check('inout 完整两端（含 source.file / durationSec）',
+      parseInout('{"version":1,"markers":[],"inout":{"in":1.790,"out":7.133},"source":{"file":"E:/a.mp4","durationSec":21.2}}'),
+      { 'in': 1.790, out: 7.133, file: 'E:/a.mp4', duration: 21.2 });
+check('inout 只给一个端点 → 另一个为 null',
+      parseInout('{"markers":[],"inout":{"in":0.5}}').out, null);
+check('inout 字段缺失 → 整体为 null', parseInout('{"markers":[]}'), null);
+check('inout 两端都是 null → 视为未设', parseInout('{"markers":[],"inout":{"in":null,"out":null}}'), null);
+check('inout 对 CSV 文本返回 null（CSV 没有这个信息）',
+      parseInout('time,name,comment,color\n1.000,,x,0\n'), null);
 /* ---------- 用例 14：越界颜色在解析层原样透传（clamp 由 payload/插件负责） ---------- */
 check('颜色 99 原样透传（由消费方 clamp）',
   parseMarkerFile('time,name,comment,color\n3.520,越界,测试,99\n', FPS).map(function (m) { return m.color; }),

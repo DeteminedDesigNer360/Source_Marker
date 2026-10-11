@@ -112,6 +112,8 @@
     <label>入</label><input id="InTc" class="tc" type="text" placeholder="00:00:00:00"/>
     <label>出</label><input id="OutTc" class="tc" type="text" placeholder="00:00:00:00"/>
     <button id="btnApply" class="mini">应用</button>
+        <button id="btnInoutFromMpv" class="mini" title="读取同名 _markers.json 里的可选字段 inout（mpv 侧 Shift+I / Shift+O 设的出入点）并写入 Pr 源监视器">从 mpv 取出入点</button>
+        <label style="font-size:11px;color:var(--dim);display:flex;align-items:center;gap:3px;cursor:pointer" title="打开后每 2.5 秒看一次同名 json；出入点有变化才写入 Pr（默认关闭）"><input id="inoutAuto" type="checkbox"/> 自动同步</label>
   </div>
   <div class="row">
     <button id="btnSeekIn" class="mini" title="把源监视器的播放头移到入点。Pr 官方接口没有定位源监视器的能力，这里走 QE 通道。">跳到入点</button>

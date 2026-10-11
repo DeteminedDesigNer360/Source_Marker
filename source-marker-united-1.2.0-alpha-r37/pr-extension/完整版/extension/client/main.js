@@ -2,7 +2,7 @@
 
 var cs = new CSInterface();
 var US = String.fromCharCode(31);
-var STATE = { fps: 25, inSec: 0, outSec: 0, clipName: '', clipPath: '', markers: [], ext: 'mp4' };
+var STATE = { fps: 25, inSec: 0, outSec: 0, clipName: '', clipPath: '', markers: [] };
 
 /* ------------------------------ 基础桥接 ------------------------------ */
 
@@ -178,7 +178,7 @@ var SETTINGS_KEY = 'sourceMarker.settings.v1';
 var SET = readSettings();
 
 function readSettings() {
-  var def = { presetPath: '', outDir: '', runBatch: true, mpvPath: '', autoRefresh: true, srcMs: 2000, mkMs: 5000, autoMk: true, followNudge: true };
+  var def = { presetPath: '', outDir: '', outName: '{clip}_in{in}', strategy: 'sequence', runBatch: true, mpvPath: '', autoRefresh: true, srcMs: 2000, mkMs: 5000, autoMk: true, followNudge: true };
   try {
     var raw = window.localStorage.getItem(SETTINGS_KEY);
     if (raw) {
@@ -192,6 +192,8 @@ function saveSettings() {
   try {
     SET.presetPath = document.getElementById('presetPath').value.trim();
     SET.outDir = document.getElementById('outDir').value.trim();
+    SET.outName = document.getElementById('outName').value.trim() || '{clip}_in{in}';
+    SET.strategy = document.getElementById('strategy').value;
     SET.runBatch = document.getElementById('runBatch').checked;
     SET.autoRefresh = document.getElementById('autoRefresh').checked;
     SET.srcMs = parseInt(document.getElementById('srcMs').value, 10) || 2000;
@@ -204,6 +206,8 @@ function saveSettings() {
 function applySettings() {
   document.getElementById('presetPath').value = SET.presetPath;
   document.getElementById('outDir').value = SET.outDir;
+  document.getElementById('outName').value = SET.outName;
+  document.getElementById('strategy').value = SET.strategy;
   document.getElementById('runBatch').checked = SET.runBatch !== false;
   document.getElementById('autoRefresh').checked = SET.autoRefresh !== false;
   document.getElementById('srcMs').value = SET.srcMs || 2000;
@@ -226,41 +230,21 @@ function stripMediaExt(s) {
 }
 function pad2(n) { return (n < 10 ? '0' : '') + n; }
 
-/* 文件名规则固定为「素材名_in入点」，不让新手填模板 */
-var NAME_TEMPLATE = '{clip}_in{in}';
-
-function buildFileName(ext) {
+function buildOutputPath(dir, ext) {
+  var tpl = document.getElementById('outName').value.trim() || '{clip}_in{in}';
   var d = new Date();
-  var name = NAME_TEMPLATE
+  var name = tpl
     .replace(/\{clip\}/g, stripMediaExt(STATE.clipName) || 'clip')
     .replace(/\{in\}/g, secondsToTimecode(STATE.inSec, STATE.fps).replace(/[:;]/g, '-'))
     .replace(/\{out\}/g, secondsToTimecode(STATE.outSec, STATE.fps).replace(/[:;]/g, '-'))
     .replace(/\{date\}/g, '' + d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) +
                           '-' + pad2(d.getHours()) + pad2(d.getMinutes()));
-  var m = name.match(/\.([A-Za-z0-9]{2,5})$/);
-  if (m) return safeName(name.slice(0, -m[0].length)) + m[0];
-  return safeName(name) + '.' + (ext || 'mp4');
-}
-
-function buildOutputPath(dir, ext) {
   var sep = dir.indexOf('\\') >= 0 ? '\\' : '/';
-  return dir.replace(/[\\\/]+$/, '') + sep + buildFileName(ext);
-}
-
-function updateNamePreview() {
-  var el = document.getElementById('namePreview');
-  if (el) el.textContent = buildFileName(STATE.ext);
-}
-
-/* 输出格式决定扩展名，选完预设就去问一次 */
-function refreshExtAndPreview() {
-  var preset = (document.getElementById('presetPath').value || '').trim();
-  if (!preset) { updateNamePreview(); return Promise.resolve(); }
-  return callJSX('smExportFileExtension', preset).then(function (er) {
-    var ext = (er.ok && er.fields[0]) ? String(er.fields[0]).replace(/^\./, '') : '';
-    if (ext) STATE.ext = ext;
-    updateNamePreview();
-  });
+  var base = dir.replace(/[\\\/]+$/, '');
+  // 模板里已自带扩展名就以它为准（用于没有活动序列、查不到预设扩展名时的手动覆盖）
+  var m = name.match(/\.([A-Za-z0-9]{2,5})$/);
+  if (m) return base + sep + safeName(name.slice(0, -m[0].length)) + m[0];
+  return base + sep + safeName(name) + '.' + ext;
 }
 
 /* ------------------------------ 结构化文件解析 ------------------------------ */
@@ -373,6 +357,24 @@ function parseMarkerFile(text, fps) {
   return rowsToMarkers(parseCSV(t), fps);
 }
 
+/* 从标记文件里读【出入点】—— 1.2.0 第 7 条新增的可选顶层字段 inout。
+   契约要求读取方忽略未知字段；这里同样容忍三种情形：字段缺失 / 只给一个端点 / 端点为 null。
+   返回 {in, out, file, duration}；没有任何端点时返回 null（表示"没有区间"）。
+   只认 JSON：CSV 里没有这个信息（契约禁止写入方给 v1 加列）。 */
+function parseInout(text) {
+  var t = String(text == null ? '' : text).trim();
+  if (!t || t.charAt(0) !== '{') return null;
+  var d = null;
+  try { d = JSON.parse(t); } catch (e) { return null; }
+  var io = d && d.inout;
+  if (!io || typeof io !== 'object') return null;
+  function num(v) { return (typeof v === 'number' && isFinite(v)) ? v : null; }
+  var i = num(io['in']), o = num(io.out);
+  if (i === null && o === null) return null;
+  var src = (d.source && typeof d.source === 'object') ? d.source : {};
+  return { 'in': i, out: o, file: String(src.file || ''), duration: num(src.durationSec) };
+}
+
 /* 把标记数组编成宿主 payload。
    协议用 \n 当记录分隔符、US(\x1f) 当字段分隔符，所以字段里的 CR/LF/US 必须先折叠成空格，
    否则含换行的备注会被 JSX 侧拆成两行（备注截断、颜色丢失）。
@@ -475,6 +477,12 @@ function restartAuto() {
   document.getElementById('mkMs').value = b;
   AUTO.srcTimer = setInterval(autoSrcTick, a);
   AUTO.mkTimer = setInterval(autoMkTick, b);
+  // 第 7 条：出入点自动同步（默认关；勾选框里开）。固定 2.5 秒，内部自己判断"没变就不写"。
+  if (INOUT.timer) { clearInterval(INOUT.timer); INOUT.timer = null; }
+  INOUT.timer = setInterval(function () {
+    var cb = document.getElementById('inoutAuto');
+    if (cb && cb.checked) syncInoutFromMpv(true);
+  }, 2500);
   return { src: a, mk: b };
 }
 
@@ -497,11 +505,8 @@ function refresh() {
     document.getElementById('clipName').textContent = f[0];
     document.getElementById('clipPath').textContent = f[1];
     document.getElementById('tcLine').textContent =
-      '入 ' + secondsToTimecode(STATE.inSec, STATE.fps) + '　出 ' + secondsToTimecode(STATE.outSec, STATE.fps) +
-      '　(' + STATE.fps.toFixed(2) + 'fps，' + f[7] + ' 个标记)';
-    setFieldIfIdle('InTc', secondsToTimecode(STATE.inSec, STATE.fps));
-    setFieldIfIdle('OutTc', secondsToTimecode(STATE.outSec, STATE.fps));
-    updateNamePreview();
+      'in ' + secondsToTimecode(STATE.inSec, STATE.fps) + ' / out ' + secondsToTimecode(STATE.outSec, STATE.fps) +
+      '  (' + STATE.fps.toFixed(2) + 'fps, ' + f[7] + ' markers)';
   });
 }
 
@@ -601,8 +606,56 @@ on('btnApply', function () {
   });
 });
 
+/* 第 7 条：把 mpv 侧写进同名 markers.json 的【可选字段 inout】一键写进 Pr 源监视器。
+   写之前必须核对素材：源监视器里若不是同一个文件，写进去就是错的 ⇒ 明确拒绝（不静默）。
+   只设了一个端点时：出点用 json 里 source.durationSec（素材末尾）补全。 */
+var INOUT = { last: '', timer: null };
+
+function syncInoutFromMpv(quiet) {
+  var clip = STATE.clipPath || '';
+  if (!clip) { if (!quiet) log('源监视器为空：先把片段载入源监视器', 'warn'); return; }
+  if (!window.cep || !window.cep.fs || typeof window.cep.fs.readFile !== 'function') {
+    if (!quiet) log('此 CEP 不支持读文件，无法读取 mpv 的出入点', 'warn'); return;
+  }
+  var jsonPath = clip.replace(/\.[^.\/\\]+$/, '') + '_markers.json';
+  var r = window.cep.fs.readFile(jsonPath, window.cep.fs.UTF8);
+  if (!r || r.err !== 0 || !r.data) {
+    if (!quiet) log('读不到 ' + jsonPath + '（err=' + (r ? r.err : 'null') + '）—— 先在 mpv 里按 Ctrl+e 导出一次？', 'warn');
+    return;
+  }
+  var io = parseInout(r.data);
+  if (!io) { if (!quiet) log('该 json 里没有出入点（mpv 侧 Shift+I 设入点 / Shift+O 设出点后再导出）', 'warn'); return; }
+  var i = (io['in'] == null) ? 0 : io['in'];
+  var o = (io.out == null) ? io.duration : io.out;      // 只设了入点：出点取素材末尾
+  if (o == null) { if (!quiet) log('只设了入点、json 里也没有时长，无法补出点', 'warn'); return; }
+  if (!(o > i)) { if (!quiet) log('出入点无效（出点不大于入点）', 'err'); return; }
+  var key = i.toFixed(3) + '/' + o.toFixed(3);
+  if (key === INOUT.last) { if (quiet) return; }         // 没变化就不重复写 Pr
+  function base(p) { return String(p || '').replace(/\\/g, '/').split('/').pop(); }
+  callJSX('smGetState').then(function (st) {
+    if (!st.ok) { log('取不到源监视器状态：' + describe(st), 'err'); return; }
+    var clipPath = st.fields[1] || '';
+    if (io.file && base(clipPath) !== base(io.file)) {
+      log('素材不一致：源监视器是「' + base(clipPath) + '」，json 记的是「' + base(io.file) + '」—— 已拒绝写入', 'err');
+      return;
+    }
+    callJSX('smSetInOut', i, o).then(function (rr) {
+      log((rr.ok ? '已把 mpv 的出入点写入 Pr ' : '写入 Pr 失败 ') + describe(rr), rr.ok ? 'ok' : 'err');
+      if (rr.ok) INOUT.last = key;
+      refresh();
+    });
+  });
+}
+
+on('btnInoutFromMpv', function () { syncInoutFromMpv(false); });
+document.getElementById('inoutAuto').addEventListener('change', function () {
+  SET.inoutAuto = document.getElementById('inoutAuto').checked;
+  saveSettings();
+  log('自动同步出入点：' + (SET.inoutAuto ? '开（每 2.5 秒看一次同名 json）' : '关'), 'info');
+});
+
 /* 微调之后让播放头跟过去。**必须节流** —— r21 真机踩过：
-   连按 入＋/出＋ 十来次后 Pr 会卡死（按钮与播放头全部没反应）。
+   连按 In＋/Out＋ 十来次后 Pr 会卡死（按钮与播放头全部没反应）。
    原因：跟随跳转走的是 QE 的 scrubTo，短时间内被反复调用把源监视器 wedged 住；
    `＋` 要向前解码、比 `−` 重，所以只有 `＋` 先崩。
    对策两条：① 防抖 + 同一时刻只允许一个在飞（排队合并成最后一次）
@@ -679,7 +732,7 @@ on('inPlus', function () { nudge('in', 1); });
 on('outMinus', function () { nudge('out', -1); });
 on('outPlus', function () { nudge('out', 1); });
 
-/* 【已删除】「读取时间线的入出点」「写到时间线」两个按钮与其宿主函数一并清理：
+/* 【已删除】「← 序列入出点」「源入出点 →」两个按钮与其宿主函数一并清理：
    序列入出点是**时间线上的位置**、片段入出点是**素材内部的位置**，坐标系不同，
    直接搬运数值一般没有意义。原因与"要恢复请先定清语义"见 改动说明 §15。 */
 on('btnClear', function () {
@@ -688,6 +741,18 @@ on('btnClear', function () {
     refresh();
   });
 });
+on('btnProbeQE', function () {
+  callJSX('smProbeQE').then(function (r) { log('QE 探测: ' + describe(r), r.ok ? 'ok' : 'err'); });
+});
+
+on('btnSelfTest', function () {
+  log('开始自检（会临时创建一个子剪辑再删除，仅影响项目面板）…');
+  callJSX('smSelfTest').then(function (r) {
+    var report = r.ok ? r.fields.join(US) : describe(r);
+    report.split('\n').forEach(function (l) { log(l, r.ok ? '' : 'err'); });
+  });
+});
+
 /* --------------------- 标记列表 + 点击跳转 --------------------- */
 
 var RS = String.fromCharCode(30), GS = String.fromCharCode(29);
@@ -1262,31 +1327,29 @@ on('btnPickPreset', function () {
     if (!p) return;
     document.getElementById('presetPath').value = p;
     saveSettings();
-    refreshExtAndPreview();
   });
 });
 
 on('btnExport', function () {
   var preset = document.getElementById('presetPath').value.trim();
   var dir = document.getElementById('outDir').value.trim();
-  if (!preset) { log('请先点「选择…」指定输出格式（选一次就会记住）', 'err'); return; }
-  if (!dir) { log('请先点「选择…」指定保存位置（选一次就会记住）', 'err'); return; }
+  if (!preset) { log('请先指定 .epr 预设（选一次就会记住）', 'err'); return; }
+  if (!dir) { log('请先指定输出目录（选一次就会记住）', 'err'); return; }
   saveSettings();
+  var strategy = document.getElementById('strategy').value;
   callJSX('smExportFileExtension', preset).then(function (er) {
     var ext = (er.ok && er.fields[0]) ? String(er.fields[0]).replace(/^\./, '') : '';
-    if (ext) STATE.ext = ext;
-    if (!ext) log('提示：暂时查不到输出格式，文件名先按 .mp4 显示');
-    var out = buildOutputPath(dir, STATE.ext);
+    if (!ext) log('提示：无活动序列，无法从预设反查扩展名，暂按 mp4 处理（可在文件名末尾直接写 .mov 等覆盖）');
+    var out = buildOutputPath(dir, ext || 'mp4');
     callJSX('smPreflight', out, preset).then(function (pf) {
       if (!pf.ok) { log('导出前检查未通过：' + describe(pf), 'err'); return; }
       log('检查通过：' + describe(pf));
       log('输出 → ' + out);
-      // 导出走唯一在 Pr 24.0 上验证可用的路径：临时序列 + encodeSequence
-      callJSX('smExportRange', out, preset, 'sequence', '').then(function (r) {
-        log((r.ok ? '已交给 Media Encoder：' : '导出失败：') + describe(r), r.ok ? 'ok' : 'err');
+      callJSX('smExportRange', out, preset, strategy, '').then(function (r) {
+        log((r.ok ? '导出已入队: ' : '失败: ') + describe(r), r.ok ? 'ok' : 'err');
         if (r.ok && document.getElementById('runBatch').checked) {
           callJSX('smStartBatch').then(function (b) {
-            log((b.ok ? 'Media Encoder 已开始渲染' : '开始渲染失败：') + describe(b), b.ok ? 'ok' : 'err');
+            log((b.ok ? '已请求 AME 开始渲染：' : '启动渲染失败：') + describe(b), b.ok ? 'ok' : 'err');
           });
         }
       });
@@ -1483,8 +1546,8 @@ on('btnImport', function () {
 applySettings();
 loadSharedColors();
 log('颜色表来源：' + COLOR_TABLE_STATE);
-log('Source Marker 1.2.0-alpha r36 已就绪。');
-refresh().then(function () { return refreshExtAndPreview(); }).then(loadMarkers).then(function () {
+log('Source Marker 1.2.0-alpha r37 已加载。');
+refresh().then(loadMarkers).then(function () {
   restartAuto();
 });
 

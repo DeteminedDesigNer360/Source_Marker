@@ -1,4 +1,4 @@
-# source-marker-united-1.2.0-alpha-r36 / mpv-player —— 文件校验和（SHA256）
+# source-marker-united-1.2.0-alpha-r37 / mpv-player —— 文件校验和（SHA256）
 # 核对：powershell -ExecutionPolicy Bypass -File .\校验.ps1
 
 bfe9ee4cceabcb8ecbfadf208d04156f73d801e6a57369a5606bb8341e204a23  licenses/Copyright.txt
@@ -10,7 +10,7 @@ e3c354d13bfe4ae2b9bafbd1b7609753c47f78a3a4989b082f34d5a938aa7a09  mpv-register.b
 d40f2f76e00e08287c39c15654e9350831e4418f1bd9619bc8dcff0dfb055e91  mpv-unregister.bat
 C58F874DCE8268980532EEB698AA928C8E3B111CE57EA44EF6111227F9794294  portable_config/input.conf.example
 56338d448c72f644971bcdd8d482e198f67cdfb11a126f6e8e0491977a66749e  portable_config/mpv.conf
-3F407CA733D754E7C9229636EC0D8AFA88EDA5045FCAB34DBCBDE59C9FCFF619  portable_config/scripts/source-markers.lua
+EFFDD0EF95AE900D2D2983EF62ACBA560FE9B03E9A10F49050B6F6EA8BC4AF22  portable_config/scripts/source-markers.lua
 179D617B62CDA281962B70C309E61E045059D7CBFC1D68A8FBEF93FD1559C481  README.md
 2baae0a109cb5962437b00a182750308ce9f69f59381df62939c00c21150ee6b  vulkan-1.dll
 5AE84B5D2ACA36FE95F55F8367915E356449121E31FD4FB259CA35F914BD8315  标记文件格式-v1.md
