@@ -1106,6 +1106,9 @@ local function set_in_point()
     if OUT_FRAME and OUT_FRAME <= IN_FRAME then OUT_FRAME = nil; cleared = '（原出点已清）' end
     notify('设入点：' .. inout_summary() .. cleared)
     log('设置入点：帧 %d t=%.3f%s', IN_FRAME, frame_seconds(IN_FRAME), cleared)
+    -- 出入点变了必须**立刻重绘**：暂停时 time-pos 不再变化，否则控制栏的"转到入/出点"
+    -- 要等到下一次播放（按 Space）才会由 time-pos 兜底重绘（用户实测反馈）
+    if redraw_ui then redraw_ui() end
 end
 local function set_out_point()
     local t = head_time()
@@ -1115,6 +1118,7 @@ local function set_out_point()
     if IN_FRAME and OUT_FRAME <= IN_FRAME then IN_FRAME = nil; cleared = '（原入点已清）' end
     notify('设出点：' .. inout_summary() .. cleared)
     log('设置出点：帧 %d t=%.3f%s', OUT_FRAME, frame_seconds(OUT_FRAME), cleared)
+    if redraw_ui then redraw_ui() end
 end
 -- 区间武装：Enter 从入点播放时置位；到出点自动解除（解除后 Space 可自由续播）。
 -- 「区间不消失」= 出入点本身一直保留；武装只是一个一次性的播放约束。
@@ -1124,6 +1128,7 @@ local function clear_inout()
     IN_FRAME, OUT_FRAME = nil, nil
     notify('已清除出入点')
     log('已清除出入点')
+    if redraw_ui then redraw_ui() end
 end
 
 local function marker_at_same_frame(t)
@@ -1787,20 +1792,28 @@ local function show_help(state)
         wrapped[ri] = wrap_visual(a.help, text_units)
         row_lines = row_lines + #wrapped[ri]
     end
+    -- 顶部两条静态说明也必须折行 —— 否则会顶出框宽被裁掉（用户上机实测反馈：这两行超出边界）
+    local hints = {
+        '鼠标党按 ' .. key_of('toggle-panel') .. ' 开 / 关 OSD，' .. key_of('switch-osd')
+            .. ' 在「按钮面板」和「Pr 风格控制栏」之间换样式；两种都能点。',
+        'Pr 风格控制栏按钮（左→右）：打标记 · 标记入点 · 标记出点 · 转到入点 · 后退一帧 · 播放/暂停 · 向前一帧 · 转到出点',
+    }
+    local hint_lines = {}
+    for _, s in ipairs(hints) do
+        for _, part in ipairs(wrap_visual(s, text_units)) do hint_lines[#hint_lines + 1] = part end
+    end
     local conflict_note = (#KEY_CHECK.errors > 0 or #KEY_CHECK.warns > 0)
-    local box_h = lh * (row_lines + 5 + (conflict_note and 1 or 0)) + 16
+    local box_h = lh * (row_lines + #hint_lines + 3 + (conflict_note and 1 or 0)) + 16
     msg.verbose(string.format('帮助折行：文本列 %d 单位，共 %d 行（原先 %d 行）', text_units, row_lines, #rows))
     local lines = {
         rect_line(x - 12, y - 12, box_w, box_h, '&H1C1C1C&', '20'),
         text_line(x, y, size + 2, '&H4DE0FF&', 'Source Markers — 快捷键帮助', true),
     }
     local cy = y + lh
-    lines[#lines + 1] = text_line(x, cy, size, '&HB0B0B0&', '鼠标党按 ' .. key_of('toggle-panel')
-        .. ' 开 / 关 OSD，' .. key_of('switch-osd') .. ' 在「按钮面板」和「Pr 风格控制栏」之间换样式；两种都能点。')
-    cy = cy + lh
-    lines[#lines + 1] = text_line(x, cy, size, '&HB0B0B0&',
-        'Pr 风格控制栏按钮（左→右）：打标记 · 标记入点 · 标记出点 · 转到入点 · 后退一帧 · 播放/暂停 · 向前一帧 · 转到出点')
-    cy = cy + lh
+    for _, part in ipairs(hint_lines) do
+        lines[#lines + 1] = text_line(x, cy, size, '&HB0B0B0&', part)
+        cy = cy + lh
+    end
     for ri, a in ipairs(rows) do
         lines[#lines + 1] = text_line(x, cy, size, '&H4DE0FF&', string.format('%-10s', a.key))
         local parts = wrapped[ri] or { a.help }
@@ -2616,6 +2629,12 @@ end
 
 mp.observe_property('mouse-pos', 'native', on_mouse_pos)
 
+-- 第 8 条：暂停 / 播放切换时立刻重绘 —— 暂停后 time-pos 不再变化，
+-- 否则控制栏的 ▶ / ⏸ 要等下一次事件（例如按 Space 恢复）才跟着变（用户实测反馈）
+mp.observe_property('pause', 'native', function()
+    if redraw_ui then redraw_ui() end
+end)
+
 -- 窗口大小 / 全屏切换后按钮坐标会失效：尺寸一变就重算并重设鼠标区域
 local last_osd = nil
 mp.observe_property('osd-dimensions', 'native', function(_, d)
@@ -2983,7 +3002,7 @@ end)
 
 write_key_template()
 check_key_conflicts()
-msg.info(string.format('source-markers 1.2.0-alpha r38 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
+msg.info(string.format('source-markers 1.2.0-alpha r39 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
     #ACTIONS, key_of('help'), key_of('toggle-panel'),
     tostring(o.sidecar), tostring(o.hide_sidecar), tostring(o.time_format),
     input and 'mp.input（播放器内输入框）' or 'python 兜底对话框'))
