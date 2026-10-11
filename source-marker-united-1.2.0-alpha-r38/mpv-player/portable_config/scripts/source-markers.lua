@@ -76,6 +76,7 @@ local o = {
     hide_export_json = true,   -- 把导出的同名 .json 设成隐藏（减少目录里的视觉重复）
     python = 'python',         -- 老版本 mpv 的输入框兜底解释器
     helper = '',               -- 自定义输入框脚本（留空用内置）
+    bar_scale = 1.0,           -- 第 8 条：Pr 风格控制栏的额外缩放（1.0 = 只随窗口自适应）
 }
 opts.read_options(o, 'source-markers')
 
@@ -1646,8 +1647,12 @@ local function key_of(name)
 end
 
 load_key_overrides()   -- 第 5 条：先读键位覆盖表，后面注册绑定时会用它
-local UI = { help = false, panel = o.panel == true, hover = nil, hint_shown = false, mode = false }
+-- 第 8 条：OSD 样式。style = 'panel'（旧按钮面板）| 'prbar'（Pr 风格控制栏）。
+-- panel / bar 是两个样式各自的「是否显示」；互斥由 ui_set_shown() 统一保证。
+local UI = { help = false, panel = o.panel == true, hover = nil, hint_shown = false, mode = false,
+             style = 'panel', bar = false }
 local PANEL_BUTTONS = {}          -- 渲染后填充：{name,label,x,y,w,h,section}
+local PRBAR_BUTTONS = {}          -- 第 8 条：控制栏按钮的命中框（渲染后填充）
 local SIDE_PADDING = 40
 
 local function new_overlay()
@@ -1659,6 +1664,7 @@ local function new_overlay()
 end
 local overlay_help = new_overlay()
 local overlay_panel = new_overlay()
+local overlay_bar = new_overlay()          -- 第 8 条：Pr 风格控制栏
 
 local function osd_size()
     local w, h = 1280, 720
@@ -1782,14 +1788,18 @@ local function show_help(state)
         row_lines = row_lines + #wrapped[ri]
     end
     local conflict_note = (#KEY_CHECK.errors > 0 or #KEY_CHECK.warns > 0)
-    local box_h = lh * (row_lines + 4 + (conflict_note and 1 or 0)) + 16
+    local box_h = lh * (row_lines + 5 + (conflict_note and 1 or 0)) + 16
     msg.verbose(string.format('帮助折行：文本列 %d 单位，共 %d 行（原先 %d 行）', text_units, row_lines, #rows))
     local lines = {
         rect_line(x - 12, y - 12, box_w, box_h, '&H1C1C1C&', '20'),
         text_line(x, y, size + 2, '&H4DE0FF&', 'Source Markers — 快捷键帮助', true),
     }
     local cy = y + lh
-    lines[#lines + 1] = text_line(x, cy, size, '&HB0B0B0&', '鼠标党可以直接按 ' .. key_of('toggle-panel') .. ' 打开按钮面板，全部功能都能点。')
+    lines[#lines + 1] = text_line(x, cy, size, '&HB0B0B0&', '鼠标党按 ' .. key_of('toggle-panel')
+        .. ' 开 / 关 OSD，' .. key_of('switch-osd') .. ' 在「按钮面板」和「Pr 风格控制栏」之间换样式；两种都能点。')
+    cy = cy + lh
+    lines[#lines + 1] = text_line(x, cy, size, '&HB0B0B0&',
+        'Pr 风格控制栏按钮（左→右）：打标记 · 标记入点 · 标记出点 · 转到入点 · 后退一帧 · 播放/暂停 · 向前一帧 · 转到出点')
     cy = cy + lh
     for ri, a in ipairs(rows) do
         lines[#lines + 1] = text_line(x, cy, size, '&H4DE0FF&', string.format('%-10s', a.key))
@@ -1938,14 +1948,187 @@ local function render_panel()
     end
 end
 
-local function toggle_panel(state)
-    UI.panel = (state == nil) and (not UI.panel) or (state == true)
-    render_panel()
-    if save_ui_state then save_ui_state() end      -- 快捷键 / 按钮 / 脚本消息，任何路径都立即落盘
-    if UI.panel then
-        notify('按钮面板已打开：所有功能都能点（' .. key_of('toggle-panel') .. ' 关闭，' .. key_of('help') .. ' 帮助）')
+----------------------------------------------------------------------
+-- 第 8 条：Pr 源监视器风格控制栏（与 F2 按钮面板互斥；F3 切换样式）
+----------------------------------------------------------------------
+-- 图标全部是【矢量多边形】（ASS \p1 绘图指令），不依赖字体：换字体/换系统都不会变形。
+-- 坐标一律在 20×20 的方格里，渲染时按 icon/20 缩放。
+local ICONS = {
+    -- 打标记：Pr 的"盾牌"（五边形、底下带尖）
+    marker = { { 2, 0, 18, 0, 18, 11, 10, 20, 2, 11 } },
+    -- 标记入点 '{'：上下钩朝右、中刺朝左
+    brace_in = {
+        { 8, 0, 16, 0, 16, 3, 8, 3 }, { 8, 0, 13, 0, 13, 20, 8, 20 },
+        { 8, 17, 16, 17, 16, 20, 8, 20 }, { 3, 8.5, 8, 8.5, 8, 11.5, 3, 11.5 },
+    },
+    -- 标记出点 '}'：上下钩朝左、中刺朝右
+    brace_out = {
+        { 4, 0, 12, 0, 12, 3, 4, 3 }, { 7, 0, 12, 0, 12, 20, 7, 20 },
+        { 4, 17, 12, 17, 12, 20, 4, 20 }, { 12, 8.5, 17, 8.5, 17, 11.5, 12, 11.5 },
+    },
+    -- 转到入点：'{' + 左向实心箭头
+    goto_in = {
+        { 2, 0, 5, 0, 5, 20, 2, 20 }, { 2, 0, 8, 0, 8, 2.5, 2, 2.5 },
+        { 2, 17.5, 8, 17.5, 8, 20, 2, 20 }, { 14, 2, 6, 10, 14, 18 },
+        { 13, 7.5, 20, 7.5, 20, 12.5, 13, 12.5 },
+    },
+    -- 转到出点：右向实心箭头 + '}'
+    goto_out = {
+        { 0, 7.5, 7, 7.5, 7, 12.5, 0, 12.5 }, { 6, 2, 14, 10, 6, 18 },
+        { 15, 0, 18, 0, 18, 20, 15, 20 }, { 12, 0, 18, 0, 18, 2.5, 12, 2.5 },
+        { 12, 17.5, 18, 17.5, 18, 20, 12, 20 },
+    },
+    -- 后退一帧：左三角 + 竖条（三角的尖必须在左边 —— 第一版把尖画在右边了）
+    back1 = { { 11, 2, 0, 10, 11, 18 }, { 14, 2, 18, 2, 18, 18, 14, 18 } },
+    -- 向前一帧：竖条 + 右三角
+    fwd1 = { { 2, 2, 6, 2, 6, 18, 2, 18 }, { 9, 2, 20, 10, 9, 18 } },
+    -- 播放 / 暂停
+    play = { { 3, 1, 18, 10, 3, 19 } },
+    pause = { { 4, 2, 8, 2, 8, 18, 4, 18 }, { 12, 2, 16, 2, 16, 18, 12, 18 } },
+}
+
+-- 左→右：与 Pr 源监视器底部栏一致（Pr 里"插入/覆盖/切换代理"在 mpv 无意义，不画也不留位）
+local PRBAR_BTN = {
+    { name = 'add',      icon = 'marker',    label = '打标记' },
+    { name = 'in-set',   icon = 'brace_in',  label = '标记入点' },
+    { name = 'out-set',  icon = 'brace_out', label = '标记出点' },
+    { name = 'goto-in',  icon = 'goto_in',   label = '转到入点', need = 'in' },
+    { name = 'back1',    icon = 'back1',     label = '后退一帧' },
+    { name = 'play',     icon = 'play',      label = '播放 / 暂停' },
+    { name = 'fwd1',     icon = 'fwd1',      label = '向前一帧' },
+    { name = 'goto-out', icon = 'goto_out',  label = '转到出点', need = 'out' },
+}
+
+-- ASS 填充多边形：pts = {x1,y1, x2,y2, ...}（20×20 单位；自动闭合）
+local function poly_line(x, y, s, color, alpha, pts)
+    local t = {}
+    for i = 1, #pts, 2 do
+        t[#t + 1] = string.format('%.1f %.1f', pts[i] * s, (pts[i + 1] or 0) * s)
+    end
+    t[#t + 1] = string.format('%.1f %.1f', pts[1] * s, pts[2] * s)     -- 闭合路径
+    return string.format('{\\an7\\pos(%d,%d)\\p1\\bord0\\shad0\\1c%s\\alpha&H%s&}m %s{\\p0}',
+        x, y, color or '&HA8A8A8&', alpha or '00', table.concat(t, ' l '))
+end
+
+-- ASS 圆角矩形：四角用三次贝塞尔（k=0.5523 是标准圆近似系数）
+local function round_rect_line(x, y, w, h, r, rgb, alpha)
+    if r > w / 2 then r = math.floor(w / 2) end
+    if r > h / 2 then r = math.floor(h / 2) end
+    local k = r * 0.5523
+    local p = string.format(
+        'm %.1f 0 l %.1f 0 b %.1f 0 %.1f %.1f %.1f %.1f l %.1f %.1f'
+        .. ' b %.1f %.1f %.1f %.1f %.1f %.1f l %.1f %.1f'
+        .. ' b %.1f %.1f %.1f %.1f %.1f %.1f l %.1f %.1f b %.1f %.1f %.1f 0 %.1f 0',
+        r, w - r,
+        w - r + k, w, r - k, w, r,
+        w, h - r,
+        w, h - r + k, w - r + k, h, w - r, h,
+        r, h,
+        r - k, h, 0, h - r + k, 0, h - r,
+        0, r,
+        0, r - k, r - k, r)
+    return string.format('{\\an7\\pos(%d,%d)\\p1\\bord0\\shad0\\1c%s\\alpha&H%s&}%s{\\p0}',
+        x, y, rgb or '&H2B2B2B&', alpha or '28', p)
+end
+
+local function prbar_metrics()
+    local w, h = osd_size()
+    local scale = math.max(0.8, math.min(1.5, h / 1080)) * (tonumber(o.bar_scale) or 1.0)
+    local icon = math.max(10, math.floor(22 * scale + 0.5))
+    local pad = math.max(4, math.floor(9 * scale + 0.5))
+    local gap = math.max(2, math.floor(4 * scale + 0.5))
+    local bpad = math.max(4, math.floor(7 * scale + 0.5))
+    local cell = icon + 2 * pad
+    local bar_w = #PRBAR_BTN * cell + (#PRBAR_BTN - 1) * gap + 2 * bpad
+    local bar_h = cell + 2 * bpad
+    local x = math.max(8, math.floor((w - bar_w) / 2))
+    local y = math.max(8, h - bar_h - math.floor(24 * scale + 0.5))
+    return { w = w, h = h, scale = scale, icon = icon, pad = pad, cell = cell, gap = gap,
+             bpad = bpad, bar_w = bar_w, bar_h = bar_h, x = x, y = y }
+end
+
+local function render_prbar()
+    local m = prbar_metrics()
+    if not (UI.bar and UI.style == 'prbar') then
+        PRBAR_BUTTONS = {}
+        set_overlay(overlay_bar, nil, m.w, m.h)
+        return
+    end
+    local paused = mp.get_property_native('pause') and true or false
+    local lines = { round_rect_line(m.x, m.y, m.bar_w, m.bar_h,
+        math.floor(m.cell * 0.28), '&H2B2B2B&', '28') }
+    local buttons = {}
+    for i, b in ipairs(PRBAR_BTN) do
+        local bx = m.x + m.bpad + (i - 1) * (m.cell + m.gap)
+        local by = m.y + m.bpad
+        local hovered = (UI.hover == ('bar:' .. b.name))
+        local disabled = (b.need == 'in' and not IN_FRAME) or (b.need == 'out' and not OUT_FRAME)
+        if hovered and not disabled then
+            lines[#lines + 1] = round_rect_line(bx, by, m.cell, m.cell,
+                math.floor(m.cell * 0.22), '&H3C6E9E&', '40')
+        end
+        local fg = disabled and '&H5A5A5A&' or (hovered and '&HFFFFFF&' or '&HA8A8A8&')
+        local key = b.icon
+        if b.name == 'play' and not paused then key = 'pause' end   -- 正在播放 → 显示"暂停"图标
+        for _, poly in ipairs(ICONS[key] or {}) do
+            lines[#lines + 1] = poly_line(bx + m.pad, by + m.pad, m.icon / 20, fg, '00', poly)
+        end
+        buttons[#buttons + 1] = { name = 'bar:' .. b.name, label = b.label,
+                                  x = bx, y = by, w = m.cell, h = m.cell, disabled = disabled }
+    end
+    set_overlay(overlay_bar, lines, m.w, m.h)
+    PRBAR_BUTTONS = buttons
+end
+
+-- 两种样式各自"是否显示"；打开一个就关掉另一个（互斥只在这一处定义）
+local function ui_style_shown(style)
+    return (style == 'prbar') and UI.bar or UI.panel
+end
+local function ui_set_shown(style, on)
+    if style == 'prbar' then
+        UI.bar = on and true or false
+        if UI.bar then UI.panel = false end
     else
-        notify('按钮面板已关闭')
+        UI.panel = on and true or false
+        if UI.panel then UI.bar = false end
+    end
+end
+
+local function toggle_panel(state)
+    local style = (UI.style == 'prbar') and 'prbar' or 'panel'
+    local on = (state == nil) and (not ui_style_shown(style)) or (state == true)
+    ui_set_shown(style, on)
+    render_panel()
+    render_prbar()
+    if save_ui_state then save_ui_state() end      -- 快捷键 / 按钮 / 脚本消息，任何路径都立即落盘
+    if on then
+        if style == 'prbar' then
+            notify('Pr 风格控制栏已打开（' .. key_of('switch-osd') .. ' 换回按钮面板，'
+                .. key_of('toggle-panel') .. ' 关闭）')
+        else
+            notify('按钮面板已打开：所有功能都能点（' .. key_of('toggle-panel') .. ' 关闭，'
+                .. key_of('help') .. ' 帮助）')
+        end
+    else
+        notify((style == 'prbar' and '控制栏' or '按钮面板') .. '已关闭')
+    end
+end
+
+-- 第 8 条：F3 —— 在两种 OSD 样式之间切换（切完立即显示）
+local function switch_osd_style()
+    UI.style = (UI.style == 'prbar') and 'panel' or 'prbar'
+    ui_set_shown(UI.style, true)
+    render_panel()
+    render_prbar()
+    -- 状态机必须把"切到哪"打进日志（否则"没反应"和"切错了"分不清）
+    log('OSD 样式切换 → %s（panel=%s bar=%s）', UI.style, tostring(UI.panel), tostring(UI.bar))
+    if save_ui_state then save_ui_state() end
+    if UI.style == 'prbar' then
+        notify('OSD 样式：Pr 风格控制栏（' .. key_of('toggle-panel') .. ' 显示/隐藏，'
+            .. key_of('switch-osd') .. ' 换回按钮面板）')
+    else
+        notify('OSD 样式：按钮面板（' .. key_of('toggle-panel') .. ' 显示/隐藏，'
+            .. key_of('switch-osd') .. ' 换成 Pr 风格控制栏）')
     end
 end
 
@@ -2124,7 +2307,13 @@ local function render_mode_badge()
     local bw = math.min(w - 40, math.floor(maxb * size * 0.72) + 20)
     local bh = lh * #rows2 + 12
     local x = math.max(SIDE_PADDING, w - bw - 24)
-    local y = math.max(SIDE_PADDING, h - bh - 24)
+    -- 第 8 条：控制栏占着底部中间 —— 徽标与它水平重叠时抬到栏上方，别叠在一起
+    local lift = 0
+    if UI.bar and UI.style == 'prbar' then
+        local m = prbar_metrics()
+        if x < m.x + m.bar_w then lift = m.bar_h + 10 end
+    end
+    local y = math.max(SIDE_PADDING, h - bh - 24 - lift)
     local lines = { rect_line(x, y, bw, bh, '&H000000&', '80') }
     for i, r in ipairs(rows2) do
         lines[#lines + 1] = text_line(x + 9, y + 6 + (i - 1) * lh, size, accent, r, true)
@@ -2280,6 +2469,7 @@ end
 -- 面板 / 帮助 / 标记模式徽标的重绘入口：给「改了状态但没经过鼠标事件」的路径用（例如切换颜色）
 redraw_ui = function()
     if UI.panel then render_panel() end
+    if UI.bar then render_prbar() end
     if UI.help then show_help(true) end
     render_mode_badge()
 end
@@ -2287,10 +2477,11 @@ end
 -- 悬停高亮：鼠标位置变化时只重绘必要的部分
 local hover_pending = false
 local function on_mouse_pos(_, pos)
-    if not UI.panel or type(pos) ~= 'table' then return end
+    if (not UI.panel and not UI.bar) or type(pos) ~= 'table' then return end
     local mx, my = tonumber(pos.x) or 0, tonumber(pos.y) or 0
     local hit = nil
-    for _, b in ipairs(PANEL_BUTTONS) do
+    local lists = UI.bar and PRBAR_BUTTONS or PANEL_BUTTONS
+    for _, b in ipairs(lists) do
         if mx >= b.x and mx <= b.x + b.w and my >= b.y and my <= b.y + b.h then hit = b.name break end
     end
     if hit ~= UI.hover then
@@ -2299,7 +2490,7 @@ local function on_mouse_pos(_, pos)
             hover_pending = true
             mp.add_timeout(0.05, function()
                 hover_pending = false
-                render_panel()
+                if UI.bar then render_prbar() else render_panel() end
             end)
         end
     end
@@ -2398,8 +2589,11 @@ register({ key = 'Ctrl+i', name = 'import-prompt', label = '导入标记',
 end)
 register({ key = 'F1', name = 'help', label = '帮助',
     help = '显示 / 隐藏这份帮助' }, function() toggle_help() end)
-register({ key = 'F2', name = 'toggle-panel', label = '按钮面板',
-    help = '显示 / 隐藏可点击的按钮面板（鼠标党的入口）' }, function() toggle_panel() end)
+register({ key = 'F2', name = 'toggle-panel', label = 'OSD 显示/隐藏',
+    help = '显示 / 隐藏当前 OSD（按钮面板 或 Pr 风格控制栏；用 F3 换样式）' }, function() toggle_panel() end)
+
+register({ key = 'F3', name = 'switch-osd', label = '切换 OSD 样式',
+    help = '在「按钮面板」和「Pr 风格控制栏」之间切换（切完立即显示）' }, function() switch_osd_style() end)
 
 register({ key = 'F10', name = 'marker-mode', label = '标记模式',
     help = '开关标记模式：开启后 M 打标记 / Shift+M 下一个 /\nCtrl+Shift+M 上一个 / Del 删除 / Enter 从入点播放（右下角有小标）' }, function()
@@ -2429,6 +2623,7 @@ mp.observe_property('osd-dimensions', 'native', function(_, d)
     if last_osd and last_osd[1] == w and last_osd[2] == h then return end
     last_osd = { w, h }
     if UI.panel then render_panel() end
+    if UI.bar then render_prbar() end
     if UI.help then show_help(true) end
 end)
 
@@ -2456,6 +2651,11 @@ local function load_ui_state()
         -- 上次会话的选择优先；配置里的 panel=yes/no 只在"还没有界面状态文件"时当默认值。
         -- （原来写成"配置写了 panel=yes 就以配置为准"，结果 F2 关掉面板后下次启动又会被强开 ✗）
         if d.panel ~= nil then UI.panel = d.panel == true end
+        -- 第 8 条：样式 + 控制栏是否显示。旧文件没有这两个键 ⇒ 样式仍是按钮面板、
+        -- 控制栏不显示，行为与升级前完全一致（用户实测过的路径不变）
+        if d.style == 'prbar' or d.style == 'panel' then UI.style = d.style end
+        if d.bar ~= nil then UI.bar = d.bar == true end
+        if UI.bar then UI.panel = false end          -- 互斥：文件里两个都开时以控制栏为准
     end
 end
 
@@ -2465,6 +2665,7 @@ save_ui_state = function()
     -- 三项开关全部落盘：按钮面板 / 帮助浮窗 / 标记列表（外加「首次提示已显示」）
     write_file_atomic(p, json_encode({
         panel = UI.panel, help = UI.help, show_list = S.show_list, hint_shown = UI.hint_shown, mode = UI.mode,
+        style = UI.style, bar = UI.bar,
     }))
 end
 
@@ -2711,6 +2912,14 @@ end)
 mp.register_script_message('dump', function()
     print(json_encode(export_doc()))
 end)
+-- 第 8 条：自动化测试钩子 —— 把控制栏的当前状态与 ASS 载荷打进日志（[v] 级），
+-- 用来断言"置灰 / 高亮 / 图标朝向"这类只能看渲染结果的东西
+mp.register_script_message('prbar', function()
+    msg.verbose(string.format('控制栏载荷：style=%s bar=%s panel=%s in=%s out=%s',
+        tostring(UI.style), tostring(UI.bar), tostring(UI.panel),
+        tostring(IN_FRAME), tostring(OUT_FRAME)))
+    msg.verbose('控制栏 ASS: ' .. tostring((overlay_bar and overlay_bar.data) or ''))
+end)
 mp.register_script_message('state', function()
     print(json_encode({
         sidecar_enabled = o.sidecar,
@@ -2720,6 +2929,8 @@ mp.register_script_message('state', function()
         fps = get_fps(),
         time_format = o.time_format,
         panel = UI.panel,
+        osd_style = UI.style,
+        osd_bar = UI.bar,
         help = UI.help,
         hide_sidecar = o.hide_sidecar,
         input = input and 'mp.input' or 'fallback',
@@ -2744,9 +2955,10 @@ mp.register_event('file-loaded', function()
             key_of('help'), key_of('toggle-panel')))
         log('新手提示：%s 帮助 / %s 按钮面板（本次是首次使用，之后不再自动弹出）',
             key_of('help'), key_of('toggle-panel'))
-    elseif UI.help or UI.panel then
+    elseif UI.help or UI.panel or UI.bar then
         -- 从上次会话保留的状态：重新渲染一次
         render_panel()
+        render_prbar()
     end
 end)
 
@@ -2756,12 +2968,12 @@ end)
 --（这正是「列表能记住、F2 面板记不住」的唯一机制差异）。
 local last_overlay_at = 0
 mp.observe_property('time-pos', 'number', function()
-    if not S.show_list and not UI.panel and not UI.help and not UI.mode and not UI.edit then return end
+    if not S.show_list and not UI.panel and not UI.bar and not UI.help and not UI.mode and not UI.edit then return end
     local now = os.clock()
     if now - last_overlay_at < 0.2 then return end
     last_overlay_at = now
     if S.show_list then update_overlay() end
-    if (UI.panel or UI.help or UI.mode or UI.edit) and redraw_ui then redraw_ui() end
+    if (UI.panel or UI.bar or UI.help or UI.mode or UI.edit) and redraw_ui then redraw_ui() end
 end)
 
 mp.register_event('shutdown', function()
@@ -2771,7 +2983,7 @@ end)
 
 write_key_template()
 check_key_conflicts()
-msg.info(string.format('source-markers 1.2.0-alpha r37 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
+msg.info(string.format('source-markers 1.2.0-alpha r38 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
     #ACTIONS, key_of('help'), key_of('toggle-panel'),
     tostring(o.sidecar), tostring(o.hide_sidecar), tostring(o.time_format),
     input and 'mp.input（播放器内输入框）' or 'python 兜底对话框'))
