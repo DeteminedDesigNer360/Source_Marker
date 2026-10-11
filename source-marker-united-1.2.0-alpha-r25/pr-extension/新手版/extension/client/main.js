@@ -1174,7 +1174,9 @@ function exportMarkers() {
           var bat = dir + '\\' + stem + '.bat';
           var content = [
             '@echo off',
-            'cd /d "%~dp0"',
+            // 不再写 cd /d "%~dp0"：%~dp0 结尾自带反斜杠，包在引号里会被 cmd 当成
+            // 转义引号 ⇒ "cannot find the path"（无害但会在 stderr 刷屏）。所有路径本来
+            // 都用 %~dp0 绝对定位，这行本来就是多余的。
             'attrib +h "%~n0.json" > "%~dp0' + LOG_NAME + '" 2>&1',
             'echo --- readback --- >> "%~dp0' + LOG_NAME + '"',
             'attrib "%~n0.json" >> "%~dp0' + LOG_NAME + '" 2>&1'
