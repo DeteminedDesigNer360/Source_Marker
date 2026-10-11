@@ -179,7 +179,7 @@ trap {
 function Log-Lines {
     if (-not (Test-Path $log)) { return 0 }
     (Get-Content $log -Encoding UTF8 -ErrorAction SilentlyContinue |
-     Select-String -Pattern '按键 →|已加标记|进入编辑态|已把|已载入|导出 CSV|绑定失败|标记模式绑定|键位覆盖表|键位检查|键位模板' |
+     Select-String -Pattern '按键 →|已加标记|进入编辑态|已把|已载入|导出 CSV|绑定失败|标记模式绑定|键位覆盖表|键位检查|键位模板|设置入点|设置出点|清除出入点|跳到 |next 计算|prev 计算' |
      Measure-Object).Count
 }
 function Script-Lines { if (Test-Path $log) { Get-Content $log -Encoding UTF8 -ErrorAction SilentlyContinue | Select-String -Pattern '\[source_markers\]' | ForEach-Object { $_.Line } } }

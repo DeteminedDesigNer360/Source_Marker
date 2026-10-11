@@ -1064,6 +1064,48 @@ local function frame_of(t, fps)
     return math.floor(t * fps + 0.5)
 end
 
+-- ── 出入点（第 7 条）：进入 2.0 的"A/B 播放向 Pr 源监视器看齐" ─────────────
+-- 一律用【帧号】存：r31 的教训是"毫秒值落在帧间会造成差一帧"，出入点必须帧对齐。
+local IN_FRAME, OUT_FRAME = nil, nil
+local function frame_seconds(f)
+    local fps = get_fps() or 25
+    return f / fps
+end
+local function inout_summary()
+    if not IN_FRAME and not OUT_FRAME then return '未设出入点' end
+    local fps = get_fps() or 25
+    local a = IN_FRAME and to_timecode(frame_seconds(IN_FRAME), fps) or '—'
+    local b = OUT_FRAME and to_timecode(frame_seconds(OUT_FRAME), fps) or '—'
+    local extra = ''
+    if IN_FRAME and OUT_FRAME and OUT_FRAME > IN_FRAME then
+        extra = string.format('（%d 帧 / %.2fs）', OUT_FRAME - IN_FRAME, (OUT_FRAME - IN_FRAME) / fps)
+    end
+    return string.format('入 %s → 出 %s%s', a, b, extra)
+end
+local function set_in_point()
+    local t = head_time()
+    if not t then notify('没有正在播放的文件') return end
+    IN_FRAME = frame_of(t)
+    local cleared = ''
+    if OUT_FRAME and OUT_FRAME <= IN_FRAME then OUT_FRAME = nil; cleared = '（原出点已清）' end
+    notify('设入点：' .. inout_summary() .. cleared)
+    log('设置入点：帧 %d t=%.3f%s', IN_FRAME, frame_seconds(IN_FRAME), cleared)
+end
+local function set_out_point()
+    local t = head_time()
+    if not t then notify('没有正在播放的文件') return end
+    OUT_FRAME = frame_of(t)
+    local cleared = ''
+    if IN_FRAME and OUT_FRAME <= IN_FRAME then IN_FRAME = nil; cleared = '（原入点已清）' end
+    notify('设出点：' .. inout_summary() .. cleared)
+    log('设置出点：帧 %d t=%.3f%s', OUT_FRAME, frame_seconds(OUT_FRAME), cleared)
+end
+local function clear_inout()
+    IN_FRAME, OUT_FRAME = nil, nil
+    notify('已清除出入点')
+    log('已清除出入点')
+end
+
 local function marker_at_same_frame(t)
     local f = frame_of(t)
     if f == nil then return nil end
@@ -1869,6 +1911,12 @@ local MODE_KEYS = {
     { key = 'Ctrl+Shift+m', name = 'prev',           label = '上一个标记' },
     -- 向 Pr 源监视器看齐：Enter = 从入点播放（原本占这个键的「改正文」已移到 Shift+Enter）
     { key = 'ENTER',       name = 'play-in',         label = '从入点播放' },
+    { key = 'Shift+i',     name = 'in-set',          label = '设入点' },
+    { key = 'Shift+o',     name = 'out-set',         label = '设出点' },
+    -- 清除出入点：Ctrl+Shift+X 与 Pr 一致；另给 Shift+DEL 作别名
+    -- （字母键的 Shift 会被 mpv 折叠进大写，注入/键盘的边界情况多，双保险）
+    { key = 'Ctrl+Shift+x', name = 'inout-clear',    label = '清除出入点' },
+    { key = 'Shift+DEL',    name = 'inout-clear',    label = '清除出入点（同上）' },
 }
 
 local EDIT_KEYS = {
@@ -1902,6 +1950,9 @@ for _, spec in ipairs(MODE_KEYS) do MODE_ACTION[spec.name] = true end
 -- Enter 一个键两种行为：不在编辑态=进编辑态；已在编辑态=改正文（所以它两边都要可用）
 MODE_ACTION['edit-text-enter'] = true
 MODE_ACTION['play-in'] = true            -- Enter：模式态=从入点播放（编辑态里 Enter 交给 mpv 输入框提交）
+MODE_ACTION['in-set'] = true
+MODE_ACTION['out-set'] = true
+MODE_ACTION['inout-clear'] = true
 MODE_ACTION['del-current'] = true        -- 模式态=删最近的标记；编辑态=删这一条
 
 local function mode_dispatch(name)
@@ -1933,7 +1984,11 @@ local function mode_bindings_apply(on)
     for _, spec in ipairs(MODE_KEYS) do all[#all + 1] = spec end
     for _, spec in ipairs(EDIT_KEYS) do all[#all + 1] = spec end
     for _, spec in ipairs(all) do
-        local bname = 'source-markers-mode-' .. spec.name   -- 两张表的名字本来就不重名（edit-* vs 其它）
+        -- 绑定名必须【每个键唯一】：同一个动作可以有多个键（例如 edit-back1 = LEFT 和 ,），
+        -- 若只用 spec.name 做绑定名，后注册的会【静默替换】前一个 —— 真机后果是
+        -- 编辑态里方向键被 , . [ ] 顶掉、从来没生效过（本会话查 Shift 键问题时才发现）。
+        local keytag = tostring(spec.key):gsub('[^%w]', '')
+        local bname = 'source-markers-mode-' .. spec.name .. '-' .. keytag
         spec.default_key = spec.default_key or spec.key
         local ekey = eff_key(spec.name, spec.default_key)   -- 第 5 条：覆盖表可以改键或禁用
         if on and ekey then
@@ -2108,6 +2163,9 @@ HANDLERS['edit-fwd10']      = function() edit_move(10) end
 for i = 0, 7 do HANDLERS['edit-c' .. i] = color_handler(i) end
 -- 【步骤 1 占位】Enter = 从入点播放：真正的区间播放与出入点在步骤 2/3 接入；
 -- 先只提示，用来验证键位本身（Enter 已从「改正文」腾出来交给播放）。
+HANDLERS['in-set']      = set_in_point
+HANDLERS['out-set']     = set_out_point
+HANDLERS['inout-clear'] = clear_inout
 HANDLERS['play-in'] = function()
     notify('从入点播放：出入点功能即将接入（Shift+I 设入点 / Shift+O 设出点）')
 end
@@ -2129,7 +2187,7 @@ local function set_marker_mode(on, quiet)
     render_mode_badge()
     if not quiet then
         if UI.mode then
-            notify('标记模式：M 打标记 · Shift+M 下一个 · Ctrl+Shift+M 上一个 · Del 删除 · Enter 从入点播放 · F10 退出')
+            notify('标记模式：M 打标记 · Shift+M 下一个 · Ctrl+Shift+M 上一个 · Del 删除 · Enter 从入点播放 · Shift+I/O 设出入点 · F10 退出')
         else
             notify('已退出标记模式')
         end
@@ -2633,7 +2691,7 @@ end)
 
 write_key_template()
 check_key_conflicts()
-msg.info(string.format('source-markers 1.2.0-alpha r32 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
+msg.info(string.format('source-markers 1.2.0-alpha r33 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
     #ACTIONS, key_of('help'), key_of('toggle-panel'),
     tostring(o.sidecar), tostring(o.hide_sidecar), tostring(o.time_format),
     input and 'mp.input（播放器内输入框）' or 'python 兜底对话框'))
