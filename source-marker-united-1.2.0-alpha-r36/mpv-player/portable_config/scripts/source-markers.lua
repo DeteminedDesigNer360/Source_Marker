@@ -799,6 +799,27 @@ end
 
 -- 统一的标记文档结构（规范 v1 §2）：键名与 Pr 面板认的 JSON 一致，
 -- 因此导出文件与 sidecar 都可以直接拿去 Pr 里导入。
+-- ── 出入点（第 7 条）状态与读数 ────────────────────────────────────────
+-- 一律用【帧号】存：r31 的教训是"毫秒值落在帧间会造成差一帧"，出入点必须帧对齐。
+-- ⚠ 这三样必须定义在 export_doc **之前**：Lua 的 local 只在其声明之后可见，
+--   放到文件后段会让 export_doc 里的引用变成全局 nil（r16 那次前向引用同款坑）。
+local IN_FRAME, OUT_FRAME = nil, nil
+local function frame_seconds(f)
+    local fps = get_fps() or 25
+    return f / fps
+end
+local function inout_summary()
+    if not IN_FRAME and not OUT_FRAME then return '未设出入点' end
+    local fps = get_fps() or 25
+    local a = IN_FRAME and to_timecode(frame_seconds(IN_FRAME), fps) or '—'
+    local b = OUT_FRAME and to_timecode(frame_seconds(OUT_FRAME), fps) or '—'
+    local extra = ''
+    if IN_FRAME and OUT_FRAME and OUT_FRAME > IN_FRAME then
+        extra = string.format('（%d 帧 / %.2fs）', OUT_FRAME - IN_FRAME, (OUT_FRAME - IN_FRAME) / fps)
+    end
+    return string.format('入 %s → 出 %s%s', a, b, extra)
+end
+
 local function export_doc()
     local fps = get_fps()
     local markers = {}
@@ -813,7 +834,7 @@ local function export_doc()
             color = normalize_color(m.color),
         }
     end
-    return {
+    local doc = {
         format = 'source-markers',
         version = 1,
         created = os.date('!%Y-%m-%dT%H:%M:%SZ'),
@@ -825,6 +846,17 @@ local function export_doc()
         },
         markers = markers,
     }
+    -- 第 7 条：出入点写成【可选顶层字段 inout】（契约 §7：新增可选字段 = 仍是 v1；
+    -- 契约要求读取方忽略未知字段 ⇒ 老读取方不受影响）。
+    -- 只在设过至少一个端点时才写；未设的端点直接省略（Lua 的 nil 不入表）——
+    -- 读取方对"字段缺失 / 端点缺失 / 端点为 null"都应视为未设。
+    if IN_FRAME or OUT_FRAME then
+        local io_doc = {}
+        if IN_FRAME then io_doc['in'] = tonumber(string.format('%.3f', frame_seconds(IN_FRAME))) end
+        if OUT_FRAME then io_doc.out = tonumber(string.format('%.3f', frame_seconds(OUT_FRAME))) end
+        doc.inout = io_doc
+    end
+    return doc
 end
 
 -- 把文件设为隐藏（Windows）：防止新手误删/误改自动保存的 sidecar。
@@ -1064,24 +1096,7 @@ local function frame_of(t, fps)
     return math.floor(t * fps + 0.5)
 end
 
--- ── 出入点（第 7 条）：进入 2.0 的"A/B 播放向 Pr 源监视器看齐" ─────────────
--- 一律用【帧号】存：r31 的教训是"毫秒值落在帧间会造成差一帧"，出入点必须帧对齐。
-local IN_FRAME, OUT_FRAME = nil, nil
-local function frame_seconds(f)
-    local fps = get_fps() or 25
-    return f / fps
-end
-local function inout_summary()
-    if not IN_FRAME and not OUT_FRAME then return '未设出入点' end
-    local fps = get_fps() or 25
-    local a = IN_FRAME and to_timecode(frame_seconds(IN_FRAME), fps) or '—'
-    local b = OUT_FRAME and to_timecode(frame_seconds(OUT_FRAME), fps) or '—'
-    local extra = ''
-    if IN_FRAME and OUT_FRAME and OUT_FRAME > IN_FRAME then
-        extra = string.format('（%d 帧 / %.2fs）', OUT_FRAME - IN_FRAME, (OUT_FRAME - IN_FRAME) / fps)
-    end
-    return string.format('入 %s → 出 %s%s', a, b, extra)
-end
+
 local function set_in_point()
     local t = head_time()
     if not t then notify('没有正在播放的文件') return end
@@ -2756,7 +2771,7 @@ end)
 
 write_key_template()
 check_key_conflicts()
-msg.info(string.format('source-markers 1.2.0-alpha r35 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
+msg.info(string.format('source-markers 1.2.0-alpha r36 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
     #ACTIONS, key_of('help'), key_of('toggle-panel'),
     tostring(o.sidecar), tostring(o.hide_sidecar), tostring(o.time_format),
     input and 'mp.input（播放器内输入框）' or 'python 兜底对话框'))

@@ -12,7 +12,7 @@
 const path = require('path');
 const { loadParser } = require('./pr-parser.js');
 
-const MAIN_JS = path.join(__dirname, '..', 'source-marker-united-1.2.0-alpha-r35', 'pr-extension', '完整版', 'extension', 'client', 'main.js');
+const MAIN_JS = path.join(__dirname, '..', 'source-marker-united-1.2.0-alpha-r36', 'pr-extension', '完整版', 'extension', 'client', 'main.js');
 const parser = loadParser(MAIN_JS);
 const parseMarkerFile = parser.parseMarkerFile;
 const secondsToTimecode = parser.secondsToTimecode;
@@ -90,6 +90,17 @@ check('带 BOM 的 CSV 仍能解析',
   parseMarkerFile('\uFEFFtime,name,comment,color\n3.520,开场,曝光过,1\n', FPS).map(round),
   [{ sec: 3.52, name: '开场', desc: '曝光过', color: '1' }]);
 
+/* ---------- 用例 10b：JSON 顶层未知字段（含 1.2.0 新增的 inout）必须被忽略 ---------- */
+check('JSON 顶层多一个 inout 不影响解析',
+      parseMarkerFile('{"version":1,"markers":[{"time":3.520,"comment":"开场","color":1}],"inout":{"in":1.0,"out":2.0}}', FPS).map(round),
+      [round({ sec: 3.520, name: '', desc: '开场', color: '1' })]);
+check('JSON 顶层 inout 只给一个端点也不影响解析',
+      parseMarkerFile('{"version":1,"markers":[{"time":1.000,"comment":"a","color":0}],"inout":{"in":0.5}}', FPS).map(round),
+      [round({ sec: 1.000, name: '', desc: 'a', color: '0' })]);
+/* ---------- 用例 10c：JSON 里 color 为【数字 0】不能被吞掉（绿=默认色，契约里是整数 0） ---------- */
+check('JSON 数字 0 色号原样透传（不能变空串）',
+      parseMarkerFile('{"version":1,"markers":[{"time":2.000,"comment":"绿","color":0}]}', FPS).map(function (m) { return m.color; }),
+      ['0']);
 /* ---------- 用例 10：未知扩展列必须被忽略（规范 §1.2） ---------- */
 check('多一个未知列 color_name 不影响',
   parseMarkerFile('time,name,comment,color,color_name\n3.520,开场,曝光过,1,红\n', FPS).map(round),
