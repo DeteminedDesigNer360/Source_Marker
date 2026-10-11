@@ -1172,9 +1172,15 @@ function exportMarkers() {
             // 而 createProcess 起的 cmd 的当前目录【不是】bat 所在目录 → attrib 报
             // "File not found - 1_markers.json"。改成 "%~dp0%~n0.json" 后既绝对定位，
             // 又不会踩"结尾反斜杠 + 引号被当成转义"那个坑。
-            'attrib +h "%~dp0%~n0.json" > "%~dp0' + LOG_NAME + '" 2>&1',
-            'echo --- readback --- >> "%~dp0' + LOG_NAME + '"',
-            'attrib "%~dp0%~n0.json" >> "%~dp0' + LOG_NAME + '" 2>&1'
+            // attrib 的输出是【控制台 OEM 码页】（中文 Windows 上是 GBK），重定向进文件后用
+            // cep.fs.readFile（UTF-8）读回来必然乱码（中文路径会变成 ????）。所以这里
+            // 只把 attrib 输出的【前两个 token】—— 即属性字段 "A   H"，本来就是纯 ASCII ——
+            // 写进日志，路径压根不进日志 ⇒ 彻底没有乱码，判定（找 H）也不受影响。
+            // 失败时 attrib 输出 "File not found - <路径>"，前两个 token 就是 "File not"，
+            // 日志同样可读，面板会把这一行原样显示出来。
+            'attrib +h "%~dp0%~n0.json" >nul 2>&1',
+            'for /f "tokens=1,2" %%a in (\'attrib "%~dp0%~n0.json"\') do echo ATTR=%%a %%b> "%~dp0' + LOG_NAME + '"',
+            'if not exist "%~dp0' + LOG_NAME + '" echo ATTR=unknown> "%~dp0' + LOG_NAME + '"'
           ].join('\r\n') + '\r\n';
           var w = null;
           try { w = window.cep.fs.writeFile(bat, content); } catch (e) { w = null; }
