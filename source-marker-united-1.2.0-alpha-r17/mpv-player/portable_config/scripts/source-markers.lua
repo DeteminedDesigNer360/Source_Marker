@@ -1386,6 +1386,106 @@ local BIND_PREFIX = SCRIPT_NAME .. '/'
 
 -- 动作表与处理函数表：先声明，后填充（帮助/面板/快捷键都读同一份）
 local ACTIONS, HANDLERS = {}, {}
+
+-- ── 第 5 条：键位覆盖表 ────────────────────────────────────────────────
+-- 文件：portable_config/script-opts/source-markers-keys.conf
+--   一行一条  动作名 = 按键      # 没写的用默认；写 none 表示禁用该键
+-- 首次运行会自动生成一份"全注释的默认值清单"当模板。
+local KEY_OVERRIDE = {}                     -- 动作名 -> 按键；false=禁用
+local KEY_CHECK = { errors = {}, warns = {}, infos = {} }
+local KEY_CONF_REL = 'script-opts/source-markers-keys.conf'
+
+-- 注意：--no-config 等情况下 mp.get_property('config') 可能是垃圾值（实测返回 "no"），
+-- 直接拼路径会把模板写到相对目录去 —— 所以写文件前必须校验路径。
+-- 本脚本自己的目录：Lua 标准库最靠得住（debug.getinfo 的 source 就是 <config>/scripts/xxx.lua）。
+-- 实测：mp.get_script_directory 与 mp.get_property('config') 在本机 mpv 上都拿不到值，
+-- 所以三个来源依次尝试，并把结果全部打进日志（省得以后再猜）。
+local function script_dir_guess()
+    -- 直接在函数里取 level 1：包一层闭包会得到 "[C]"（本会话踩过）
+    local src = ''
+    local info = debug and debug.getinfo and debug.getinfo(1, 'S')
+    if type(info) == 'table' and info.source then src = tostring(info.source) end
+    local sd = (mp.get_script_directory and mp.get_script_directory()) or ''
+    local cd1 = mp.get_property('config-dir') or ''
+    local cd2 = mp.get_property('options/config-dir') or ''
+    if not KEY_DIR_CACHE then
+        msg.verbose('键位目录探测：source=%s | get_script_directory=%s | config-dir=%s | options/config-dir=%s', src, sd, cd1, cd2)
+    end
+    local from_src = src:gsub('^@', ''):match('^(.*)[\\/][^\\/]*$') or ''
+    local cand = {}
+    if from_src ~= '' then cand[#cand + 1] = from_src end
+    if sd ~= '' then cand[#cand + 1] = sd end
+    for _, c in ipairs(cand) do
+        local up = c:gsub('[\\/]scripts[\\/]?$', '')
+        if up ~= c and up ~= '' then return up end          -- <config>/scripts → <config>
+    end
+    for _, c in ipairs({ cd1, cd2 }) do
+        if c ~= '' and (c:match('^%a:[\\/]') or c:match('^[\\/]')) then
+            local up = c:gsub('[\\/]scripts[\\/]?$', '')
+            return up
+        end
+    end
+    return nil
+end
+
+local function key_conf_dir()
+    -- 注意：不要用 file_exists 去验目录 —— 它内部是 io.open，在 Windows 上对目录会失败。
+    -- 从脚本路径推出的上一级本身就是真实目录。
+    local d = script_dir_guess()
+    if d then return d end
+    return nil
+end
+local function key_conf_read_path()
+    if mp.find_config_file then
+        local p = mp.find_config_file(KEY_CONF_REL)
+        if p then return p end
+    end
+    local base = key_conf_dir()
+    if base and file_exists(base .. '/' .. KEY_CONF_REL) then return base .. '/' .. KEY_CONF_REL end
+    return nil
+end
+local function key_conf_write_path()
+    local base = key_conf_dir()
+    if not base then return nil end
+    return base .. '/' .. KEY_CONF_REL
+end
+
+local function load_key_overrides()
+    KEY_OVERRIDE = {}
+    local path = key_conf_read_path()
+    if not path then log('键位覆盖表：未找到（用默认键位）'); return end
+    local text = read_file(path)
+    if not text then log('键位覆盖表：读不出来，用默认键位', path); return end
+    local n, bad = 0, 0
+    for line in (text .. '\n'):gmatch('([^\n]*)\n') do
+        local stripped = line:gsub('#.*$', '')
+        local s = trim(stripped)
+        if s ~= '' then
+            local name, key = s:match('^([%w%-%._]+)%s*=%s*(.-)%s*$')
+            if name then
+                if key == '' or key:lower() == 'none' or key == '-' then
+                    KEY_OVERRIDE[name] = false
+                else
+                    KEY_OVERRIDE[name] = key
+                end
+                n = n + 1
+            else
+                bad = bad + 1
+                msg.warn('键位表这行看不懂（已忽略）：' .. line)
+            end
+        end
+    end
+    log('键位覆盖表：%s（%d 条生效，%d 行看不懂）', path, n, bad)
+end
+
+-- 取生效键位：nil=用默认；false → 返回 nil 表示禁用
+local function eff_key(name, default)
+    local v = KEY_OVERRIDE[name]
+    if v == nil then return default end
+    if v == false then return nil end
+    return v
+end
+
 local function key_of(name)
     for _, a in ipairs(ACTIONS) do
         if a.name == name then return a.key end
@@ -1393,6 +1493,7 @@ local function key_of(name)
     return '?'
 end
 
+load_key_overrides()   -- 第 5 条：先读键位覆盖表，后面注册绑定时会用它
 local UI = { help = false, panel = o.panel == true, hover = nil, hint_shown = false, mode = false }
 local PANEL_BUTTONS = {}          -- 渲染后填充：{name,label,x,y,w,h,section}
 local SIDE_PADDING = 40
@@ -1528,7 +1629,8 @@ local function show_help(state)
         wrapped[ri] = wrap_visual(a.help, text_units)
         row_lines = row_lines + #wrapped[ri]
     end
-    local box_h = lh * (row_lines + 4) + 16
+    local conflict_note = (#KEY_CHECK.errors > 0 or #KEY_CHECK.warns > 0)
+    local box_h = lh * (row_lines + 4 + (conflict_note and 1 or 0)) + 16
     msg.verbose(string.format('帮助折行：文本列 %d 单位，共 %d 行（原先 %d 行）', text_units, row_lines, #rows))
     local lines = {
         rect_line(x - 12, y - 12, box_w, box_h, '&H1C1C1C&', '20'),
@@ -1545,6 +1647,11 @@ local function show_help(state)
             msg.verbose(string.format('帮助行 %s[%d/%d] 宽=%d：%s', a.key, pi, #parts, visual_width(part), part))
             if pi < #parts then cy = cy + lh end
         end
+        cy = cy + lh
+    end
+    if conflict_note then
+        lines[#lines + 1] = text_line(x, cy, size, '&HFF9090&',
+            string.format('⚠ 键位：%d 处错误 / %d 处警告 —— script-message keys 看详情', #KEY_CHECK.errors, #KEY_CHECK.warns))
         cy = cy + lh
     end
     lines[#lines + 1] = text_line(x, cy, size, '&H4DE0FF&', string.format('%-10s', 'Ctrl+1..8'))
@@ -1773,9 +1880,11 @@ local function mode_bindings_apply(on)
     for _, spec in ipairs(EDIT_KEYS) do all[#all + 1] = spec end
     for _, spec in ipairs(all) do
         local bname = 'source-markers-mode-' .. spec.name   -- 两张表的名字本来就不重名（edit-* vs 其它）
-        if on then
+        spec.default_key = spec.default_key or spec.key
+        local ekey = eff_key(spec.name, spec.default_key)   -- 第 5 条：覆盖表可以改键或禁用
+        if on and ekey then
             -- 每个键单独 pcall：某个键名若不被 mpv 接受，不至于拖垮整批；失败会写进日志（便于诊断）
-            local ok, err = pcall(mp.add_key_binding, spec.key, bname,
+            local ok, err = pcall(mp.add_key_binding, ekey, bname,
                                   function() mode_dispatch(spec.name) end)
             if ok then n = n + 1
             else log('绑定失败：key=%s name=%s err=%s', tostring(spec.key), bname, tostring(err)) end
@@ -2102,7 +2211,10 @@ end)
 
 for _, a in ipairs(ACTIONS) do
     local fn = HANDLERS[a.name]
-    local ok, err = pcall(mp.add_key_binding, a.key, a.name, fn or function() end)
+    a.default_key = a.default_key or a.key
+    a.key = eff_key(a.name, a.default_key)            -- 第 5 条：覆盖表可以改键或禁用（nil）
+    local ok, err = true, nil
+    if a.key then ok, err = pcall(mp.add_key_binding, a.key, a.name, fn or function() end) end
     if not ok then msg.warn(string.format('绑定 %s 失败: %s', tostring(a.key), tostring(err))) end
 end
 
@@ -2262,6 +2374,129 @@ mp.register_script_message('ui-state', function(path)
         if not ok then msg.warn('写 ui-state 失败: ' .. tostring(err)) end
     end
 end)
+-- ── 第 5 条：键位模板 + 冲突检查 + 查询接口 ────────────────────────────
+local function key_all_known()
+    local known = {}
+    for _, a in ipairs(ACTIONS) do known[a.name] = true end
+    for _, s in ipairs(MODE_KEYS) do known[s.name] = true end
+    for _, s in ipairs(EDIT_KEYS) do known[s.name] = true end
+    return known
+end
+
+local function write_key_template()
+    local path = key_conf_write_path()
+    if not path then log('键位模板：跳过（找不到可写的配置目录）') return end
+    if file_exists(path) then return end                 -- 只在缺失时生成，绝不覆盖用户改过的
+    ensure_dir(dir_of(path))
+    local L = {}
+    L[#L+1] = '# Source Markers 键位覆盖表（改完重启 mpv 生效）'
+    L[#L+1] = '# 语法： <动作名> = <按键>      没写的动作用默认；写 none 表示禁用这个键'
+    L[#L+1] = '# 按键写法与 mpv 一致：字母/数字原样；命名键用大写（ENTER / LEFT / DEL / ESC / F10 ...）；'
+    L[#L+1] = '#                       组合键写 Ctrl+e / Shift+m / Ctrl+Shift+m / Alt+m'
+    L[#L+1] = '# 也可以完全不用这个文件，改用 mpv 的 input.conf（优先级最高，会盖过本插件）：'
+    L[#L+1] = '#     <你的键>  script-binding ' .. BIND_PREFIX .. '<动作名>'
+    L[#L+1] = ''
+    L[#L+1] = '# —— 全局快捷键 ——'
+    for _, a in ipairs(ACTIONS) do
+        L[#L+1] = string.format('# %-24s = %s', a.name, a.default_key or a.key or '')
+    end
+    L[#L+1] = ''
+    L[#L+1] = '# —— 标记模式内（先按 F10 打开）——'
+    for _, s in ipairs(MODE_KEYS) do
+        L[#L+1] = string.format('# %-24s = %s', s.name, s.default_key or s.key)
+    end
+    L[#L+1] = ''
+    L[#L+1] = '# —— 编辑态内（标记模式里按 ENTER 进入）——'
+    for _, s in ipairs(EDIT_KEYS) do
+        L[#L+1] = string.format('# %-24s = %s', s.name, s.default_key or s.key)
+    end
+    local ok = write_file_atomic(path, table.concat(L, '\r\n') .. '\r\n')
+    log('键位模板：%s（%s）', path, ok and '已生成' or '写入失败')
+end
+
+-- 收集"当前生效"的键位：动作名 -> 键（禁用则不出现）
+local function key_effective_map()
+    local eff, bykey = {}, {}
+    local function add(name, key)
+        if not key or eff[name] then return end
+        eff[name] = key
+        local k = key:upper()
+        bykey[k] = bykey[k] or {}
+        bykey[k][#bykey[k] + 1] = name
+    end
+    for _, a in ipairs(ACTIONS) do add(a.name, a.key) end
+    for _, s in ipairs(MODE_KEYS) do add(s.name, eff_key(s.name, s.default_key or s.key)) end
+    for _, s in ipairs(EDIT_KEYS) do add(s.name, eff_key(s.name, s.default_key or s.key)) end
+    return eff, bykey
+end
+
+local function check_key_conflicts()
+    local errors, warns, infos = {}, {}, {}
+    local known = key_all_known()
+    for name in pairs(KEY_OVERRIDE) do
+        if not known[name] then
+            warns[#warns + 1] = string.format('键位表里的动作名 %s 不存在（这条没生效，检查拼写）', name)
+        end
+    end
+    local eff, bykey = key_effective_map()
+    for k, names in pairs(bykey) do
+        if #names > 1 then
+            errors[#errors + 1] = string.format('插件内部同一个键 %s 绑了多个动作：%s', k, table.concat(names, ' / '))
+        end
+    end
+    local mine = 'input_' .. SCRIPT_NAME
+    local ok, binds = pcall(mp.get_property_native, 'input-bindings')
+    if ok and type(binds) == 'table' then
+        local seen = {}
+        for _, b in ipairs(binds) do
+            local k = tostring(b.key or ''):upper()
+            if k ~= '' and bykey[k] and tostring(b.section) ~= mine then
+                local tag = k .. '|' .. tostring(b.section) .. '|' .. tostring(b.cmd)
+                if not seen[tag] then
+                    seen[tag] = true
+                    local line = string.format('%s ← %s：%s', k,
+                        (tostring(b.section) == 'default') and 'mpv 默认' or ('脚本 ' .. tostring(b.section)),
+                        tostring(b.cmd))
+                    if tostring(b.section) == 'default' and b.is_weak == false then
+                        warns[#warns + 1] = line .. '  ← 你自己的 input.conf 优先级更高，这个键会被它盖掉'
+                    elseif tostring(b.section) == 'default' then
+                        infos[#infos + 1] = line .. '（本插件会盖过它）'
+                    else
+                        infos[#infos + 1] = line .. '（与它重叠，按各自优先级取一个）'
+                    end
+                end
+            end
+        end
+    end
+    KEY_CHECK = { errors = errors, warns = warns, infos = infos }
+    log('键位检查：错误 %d / 警告 %d / 提示 %d', #errors, #warns, #infos)
+    for _, s in ipairs(errors) do msg.warn('键位冲突（错误）：' .. s) end
+    for _, s in ipairs(warns) do msg.warn('键位冲突（警告）：' .. s) end
+    for _, s in ipairs(infos) do msg.verbose('键位提示：' .. s) end
+    if #errors > 0 then
+        notify(string.format('键位有 %d 处冲突（按 F1 看帮助 / 查日志）', #errors))
+    elseif #warns > 0 then
+        notify(string.format('键位有 %d 处警告，详见日志（script-message keys 可查）', #warns))
+    end
+end
+
+mp.register_script_message('keys', function()
+    local eff = {}
+    for name, key in pairs(key_effective_map()) do eff[name] = key end
+    for _, a in ipairs(ACTIONS) do if not a.key then eff[a.name] = '（已禁用）' end end
+    print(json_encode({
+        conf = key_conf_read_path() or '',
+        effective = eff,
+        errors = KEY_CHECK.errors, warns = KEY_CHECK.warns, infos = KEY_CHECK.infos,
+    }))
+end)
+mp.register_script_message('keys-reload', function()
+    KEY_OVERRIDE = {}
+    load_key_overrides()
+    check_key_conflicts()
+    notify('键位表已重新读取（新键位要重启 mpv 才生效）')
+end)
+
 mp.register_script_message('dump', function()
     print(json_encode(export_doc()))
 end)
@@ -2323,6 +2558,8 @@ mp.register_event('shutdown', function()
     save_ui_state()
 end)
 
+write_key_template()
+check_key_conflicts()
 msg.info(string.format('source-markers 1.2.0-alpha r17 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
     #ACTIONS, key_of('help'), key_of('toggle-panel'),
     tostring(o.sidecar), tostring(o.hide_sidecar), tostring(o.time_format),

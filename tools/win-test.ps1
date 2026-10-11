@@ -27,6 +27,7 @@ param(
     [int]$WaitMs = 1400,
     [int[]]$ShotAfter = @(),
     [string[]]$Expect = @(),
+    [string[]]$NotExpect = @(),
     [switch]$NoCloseHelp,
     [switch]$NoMaximize,
     [switch]$KeepUiState,
@@ -41,6 +42,7 @@ $NL = [char]10
 # 所以兼容三种写法：真数组 / 空格分隔的字符串（-Keys）/ 竖线分隔（-Expect）。
 if ($Keys.Count -eq 1 -and $Keys[0] -match '\s') { $Keys = @($Keys[0] -split '\s+' | Where-Object { $_ -ne '' }) }
 if ($Expect.Count -eq 1 -and $Expect[0] -match '\|') { $Expect = @($Expect[0] -split '\|') }
+if ($NotExpect.Count -eq 1 -and $NotExpect[0] -match '\|') { $NotExpect = @($NotExpect[0] -split '\|') }
 if ($ShotAfter.Count -eq 1 -and ([string]$ShotAfter[0]) -match ',') {
     $ShotAfter = @(([string]$ShotAfter[0]) -split ',' | ForEach-Object { [int]$_ })
 }
@@ -157,7 +159,7 @@ trap {
 function Log-Lines {
     if (-not (Test-Path $log)) { return 0 }
     (Get-Content $log -Encoding UTF8 -ErrorAction SilentlyContinue |
-     Select-String -Pattern '按键 →|已加标记|进入编辑态|已把|已载入|导出 CSV|绑定失败|标记模式绑定' |
+     Select-String -Pattern '按键 →|已加标记|进入编辑态|已把|已载入|导出 CSV|绑定失败|标记模式绑定|键位覆盖表|键位检查|键位模板' |
      Measure-Object).Count
 }
 function Script-Lines { if (Test-Path $log) { Get-Content $log -Encoding UTF8 -ErrorAction SilentlyContinue | Select-String -Pattern '\[source_markers\]' | ForEach-Object { $_.Line } } }
@@ -224,13 +226,21 @@ if (Test-Path -LiteralPath $side) { Say ([System.IO.File]::ReadAllText($side)) }
 # ---------- 收日志 ----------
 Say '--- 脚本日志（只列动作行）---'
 $acts = Script-Lines | Select-String -Pattern '标记模式按键|编辑态按键|已加标记|进入编辑态|退出|移动|颜色|导出|载入|绑定'
+$allScript = Script-Lines          # 断言在【全部】脚本行里找（actions 只是给人看的摘要）
 foreach ($a in $acts) { Say ($a.ToString().Trim()) }
 
 # ---------- 断言（闸门） ----------
 $fails = New-Object System.Collections.ArrayList
 foreach ($pat in $Expect) {
-    $hit = $acts | Select-String -Pattern ([regex]::Escape($pat)) | Select-Object -First 1
+    $hit = $allScript | Select-String -Pattern ([regex]::Escape($pat)) | Select-Object -First 1
     if ($hit) { Say ('✓ 命中：' + $pat) } else { [void]$fails.Add($pat); Say ('✗ 未命中：' + $pat) }
+}
+
+# ---------- 反向断言：这些必须【不】出现 ----------
+foreach ($pat in $NotExpect) {
+    $hit = $allScript | Select-String -Pattern ([regex]::Escape($pat)) | Select-Object -First 1
+    if ($hit) { [void]$fails.Add('(不该出现) ' + $pat); Say ('✗ 不该出现却出现：' + $pat) }
+    else { Say ('✓ 确认未出现：' + $pat) }
 }
 
 # ---------- 清理 ----------
