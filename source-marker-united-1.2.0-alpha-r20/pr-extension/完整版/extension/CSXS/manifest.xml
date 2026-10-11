@@ -18,11 +18,6 @@
   </ExecutionEnvironment>
   <DispatchInfoList>
     <Extension Id="com.frisk.sourcemarker.panel">
-    <!-- CEP 的 Node 层：面板要用 child_process 跑 attrib 把同名 json 设为隐藏。
-         注意：改这里之后必须重启 Pr 才生效。 -->
-    <CEFCommandLine>
-      <Parameter>--enable-nodejs</Parameter>
-    </CEFCommandLine>
       <DispatchInfo>
         <Resources>
           <MainPath>./client/index.html</MainPath>
@@ -45,6 +40,12 @@
             </MinSize>
           </Geometry>
         </UI>
+        <CEFCommandLine>
+          <!-- 面板要用 Node 的 child_process 跑 attrib 把同名 json 设为隐藏。
+               必须放在 DispatchInfo 里面（放 Extension 下会被 CEP 忽略），改完要重启 Pr。 -->
+          <Parameter>--enable-nodejs</Parameter>
+          <Parameter>--mixed-context</Parameter>
+        </CEFCommandLine>
       </DispatchInfo>
     </Extension>
   </DispatchInfoList>
