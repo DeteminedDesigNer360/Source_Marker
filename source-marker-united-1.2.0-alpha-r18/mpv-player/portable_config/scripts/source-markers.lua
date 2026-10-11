@@ -2212,9 +2212,14 @@ end)
 for _, a in ipairs(ACTIONS) do
     local fn = HANDLERS[a.name]
     a.default_key = a.default_key or a.key
-    a.key = eff_key(a.name, a.default_key)            -- 第 5 条：覆盖表可以改键或禁用（nil）
+    -- a.key 是【给人看的显示串】，绝不留 nil：禁用时显示"（已禁用）"，绑定另用 a.bind_key。
+    -- 之前直接把 nil 写进 a.key，任何 string.format('%s', a.key) 都会抛异常，
+    -- 于是面板/帮助渲染连带死掉（用户实测：help=none 之后 F2、F10 都没反应）。
+    local bind_key = eff_key(a.name, a.default_key)
+    a.bind_key = bind_key
+    a.key = bind_key or '（已禁用）'
     local ok, err = true, nil
-    if a.key then ok, err = pcall(mp.add_key_binding, a.key, a.name, fn or function() end) end
+    if bind_key then ok, err = pcall(mp.add_key_binding, bind_key, a.name, fn or function() end) end
     if not ok then msg.warn(string.format('绑定 %s 失败: %s', tostring(a.key), tostring(err))) end
 end
 
@@ -2445,6 +2450,10 @@ local function check_key_conflicts()
         end
     end
     local mine = 'input_' .. SCRIPT_NAME
+    local user_set = {}
+    for name, v in pairs(KEY_OVERRIDE) do
+        if v ~= false and type(v) == 'string' then user_set[v:upper()] = name end
+    end
     local ok, binds = pcall(mp.get_property_native, 'input-bindings')
     if ok and type(binds) == 'table' then
         local seen = {}
@@ -2457,7 +2466,12 @@ local function check_key_conflicts()
                     local line = string.format('%s ← %s：%s', k,
                         (tostring(b.section) == 'default') and 'mpv 默认' or ('脚本 ' .. tostring(b.section)),
                         tostring(b.cmd))
-                    if tostring(b.section) == 'default' and b.is_weak == false then
+                    local uname = user_set[k]
+                    if uname then
+                        -- 用户亲自把某个动作改到了这个键：无论对方是谁都要提醒（它会盖掉对方）
+                        warns[#warns + 1] = line ..
+                            string.format('  ← 你把「%s」改到了 %s，它会盖掉上面这个功能', uname, k)
+                    elseif tostring(b.section) == 'default' and b.is_weak == false then
                         warns[#warns + 1] = line .. '  ← 你自己的 input.conf 优先级更高，这个键会被它盖掉'
                     elseif tostring(b.section) == 'default' then
                         infos[#infos + 1] = line .. '（本插件会盖过它）'
