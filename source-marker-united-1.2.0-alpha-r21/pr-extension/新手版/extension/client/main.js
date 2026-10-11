@@ -1124,52 +1124,42 @@ function exportMarkers() {
            仍然先检能力、再按 createProcess 的约定检查 err（r21 踩过"返回 err=3 其实没起来"）。 */
         var jp = base + '.json';
         /* 默认把同名 json 设为隐藏（与 mpv 侧一致，减少目录里的视觉重复）。
-           路线：优先走 CEP 的【Node 层】（manifest 里已开 --enable-nodejs）——
-             · Node 自己按 Windows 规则拼命令行，不经 cmd、也不乱加引号
-               （此前 CEP createProcess 的两次失败：err=0 但属性没变，最可能就是引号/编码）
-             · 而且能把 attrib 的 stdout/stderr/退出码捞回来 → 成没成一目了然
-             · 跑完再【回读】一次 attrib（不带 +h）确认属性里确实有 H
-           取不到 Node 时退回原来的 CEP createProcess 路线（并如实记日志）。 */
+           真机结论链：
+             ✗ CEP createProcess(cmd, '/c', 'attrib', '+H', '"路径"')  —— 多参数分开传，
+               CEP 自行拼引号后撞上 cmd /c 的引号规则，attrib 拿到废参数 → err=0 但没生效。
+             ✗ manifest 开 --enable-nodejs + --mixed-context（已确认装对、装完也重启了 Pr）
+               → 本机 Pr 24 / CEP 11 仍不提供 window.cep_node（该代已不带 Node 层）。
+             ✓ mpv 侧 hide_file 用的是 os.execute('attrib +h "路径" 2>nul')，
+               即 cmd /c <【一整个】命令字符串> —— 这条在本机对中文路径已验证可行。
+           所以这里照抄【整串传】的做法，并把 attrib 的输出重定向到临时文件再读回来，
+           成没成、错在哪，日志里一眼可见（每个导出只多一次进程，跑完即删临时文件）。 */
         (function () {
-          var node = (typeof window !== 'undefined') ? window.cep_node : null;
-          if (node && typeof node.require === 'function') {
-            var cp = null;
-            try { cp = node.require('child_process'); } catch (e) { cp = null; }
-            if (cp && typeof cp.execFile === 'function') {
-              var sysRoot = (typeof process !== 'undefined' && process.env && process.env.SystemRoot) ? process.env.SystemRoot : 'C:\\Windows';
-              var attrib = sysRoot + '\\System32\\attrib.exe';
-              log('隐藏：走 Node 路线（' + attrib + '）→ ' + jp);
-              cp.execFile(attrib, ['+h', jp], { windowsHide: true }, function (err, stdout, stderr) {
-                cp.execFile(attrib, [jp], { windowsHide: true }, function (err2, out2) {
-                  var rb = String(out2 || '').trim();
-                  var hasH = /(^|[ \t])H([ \t]|$)/.test(rb);
-                  log('隐藏结果：' + (err ? ('attrib 报错：' + String(stderr || err.message).trim()) : 'attrib 无报错')
-                      + ' ｜ 回读：' + (rb || '（空）'), (err || !hasH) ? 'warn' : 'ok');
-                  if (!hasH) log('这一行是定位问题的关键（要么没有 H，要么 attrib 报了错），请发给我。', 'warn');
-                });
-              });
-              return;
-            }
-            log('CEP 的 Node 层在、但 child_process 用不了 —— 退回 createProcess 路线', 'warn');
-          } else {
-            log('此 Pr/CEP 未启用 Node（window.cep_node 不存在）→ 退回 createProcess 路线；'
-                + '若要用 Node 路线，请确认 manifest 里有 --enable-nodejs 并【重启 Pr】。', 'warn');
+          var logFile = jp + '.hidetmp';
+          function finish(ok, detail) {
+            log((ok ? '隐藏结果：成功（属性里有 H）' : '隐藏结果：未确认隐藏 ') + '｜ ' + detail, ok ? 'ok' : 'warn');
+            try { window.cep.fs.deleteFile(logFile); } catch (e) {}
           }
-          /* ---- 退回路线：CEP createProcess（保留；err=0 只代表"起来了"） ---- */
+          function readback(tag) {
+            var raw = null;
+            try { raw = window.cep.fs.readFile(logFile); } catch (e) { finish(false, tag + ' ｜ 读不到输出文件：' + e.message); return; }
+            var txt = (raw && raw.data) ? String(raw.data).replace(/[\r\n\s]+$/, '') : '';
+            finish(/(^|[ \t])H([ \t]|$)/.test(txt), tag + ' ｜ attrib 输出：' + (txt || '（空）'));
+          }
           if (!window.cep || !window.cep.process || typeof window.cep.process.createProcess !== 'function') {
             log('同名 JSON 未能隐藏（此 CEP 版本没有 process.createProcess）—— 不影响使用', 'warn');
             return;
           }
-          var rawH = null, cmds = ['C:\\Windows\\System32\\cmd.exe', 'cmd.exe'];
-          for (var ci = 0; ci < cmds.length && !(rawH && rawH.err === 0); ci++) {
-            try {
-              rawH = window.cep.process.createProcess(cmds[ci], '/c', 'attrib', '+H', '"' + jp + '"');
-              log('隐藏尝试（退回路线）：' + cmds[ci] + ' /c attrib +H "' + jp + '" → 返回 ' + JSON.stringify(rawH));
-            } catch (eh) { log('隐藏异常（' + cmds[ci] + '）：' + eh.message, 'warn'); }
-          }
-          var spawned = !!(rawH && rawH.err === 0);
-          log(spawned ? ('已请求隐藏同名 JSON（请看一眼目录确认）：' + jp)
-                      : ('同名 JSON 未能隐藏（进程都没起来）—— 不影响使用'), spawned ? 'ok' : 'warn');
+          var cmdExe = 'C:\\Windows\\System32\\cmd.exe';
+          // 关键：整条命令作为【一个】参数传给 cmd /c（等价于 mpv 的 os.execute）
+          //       末尾再用不带 +h 的 attrib 把属性打出来，作为独立回读确认。
+          var one = '/c attrib +h "' + jp + '" > "' + logFile + '" 2>&1 & attrib "' + jp + '" >> "' + logFile + '"';
+          var r = null;
+          try {
+            r = window.cep.process.createProcess(cmdExe, one);
+            log('隐藏尝试：cmd /c（整串一个参数）→ 返回 ' + JSON.stringify(r));
+          } catch (e) { log('隐藏异常（cmd /c 整串）：' + e.message, 'warn'); }
+          if (r && r.err === 0) { setTimeout(function () { readback('cmd /c 整串'); }, 800); }
+          else { log('同名 JSON 未能隐藏（进程都没起来）—— 不影响使用', 'warn'); }
         })();
       }
       var v1 = verifyExport(csvPath, n, false);
@@ -1453,3 +1443,34 @@ log('Source Marker 1.2.0-alpha r21 已就绪。');
 refresh().then(function () { return refreshExtAndPreview(); }).then(loadMarkers).then(function () {
   restartAuto();
 });
+
+/* ── 诊断：CEP / Node 环境一次性转储（r22；排查 window.cep_node 为何不存在）──
+   目的：不再靠猜 —— 把 CEP 的 API 版本、CEF 的 UA、Node 相关全局、宿主信息、
+   以及"本面板是从哪个路径加载的"一次性打进面板日志。 */
+(function cepEnvDump() {
+  function go() {
+    var lines = [];
+    function t(name, getter) {
+      try { lines.push(name + '=' + getter()); } catch (e) { lines.push(name + '=(取不到:' + e.message + ')'); }
+    }
+    t('cep_node', function () { return typeof window.cep_node; });
+    t('bare_cep_node', function () { return typeof cep_node; });
+    t('require', function () { return typeof require; });
+    t('process', function () { return typeof process; });
+    t('module', function () { return typeof module; });
+    t('__adobe_cep__', function () { return typeof window.__adobe_cep__; });
+    t('cep_api_version', function () { return window.__adobe_cep__.getCurrentApiVersion(); });
+    t('ua', function () { return navigator.userAgent; });
+    t('host', function () {
+      var he = (window.cep && window.cep.getHostEnvironment) ? window.cep.getHostEnvironment() : null;
+      return he ? (he.appName + ' ' + he.appVersion + ' / CEP ' + he.CEPVersion) : 'n/a';
+    });
+    t('page', function () { return location.href; });
+    try { log('诊断(CEP/Node)：' + lines.join(' ｜ ')); } catch (e) {}
+    try { console.log('诊断(CEP/Node)：' + lines.join(' ｜ ')); } catch (e) {}
+  }
+  try {
+    if (document.readyState === 'complete' || document.readyState === 'interactive') { setTimeout(go, 800); }
+    else { document.addEventListener('DOMContentLoaded', function () { setTimeout(go, 800); }); }
+  } catch (e) { try { log('诊断装载失败：' + e.message, 'warn'); } catch (e2) {} }
+})();
