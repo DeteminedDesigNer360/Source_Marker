@@ -1999,6 +1999,17 @@ MODE_ACTION['out-set'] = true
 MODE_ACTION['inout-clear'] = true
 MODE_ACTION['del-current'] = true        -- 模式态=删最近的标记；编辑态=删这一条
 
+-- 模式态下的方向键：按【mpv 默认】前后跳（用户真机明确要求）。
+-- 为什么需要显式做：模式开启时插件把编辑键也绑上了（LEFT → edit-back1，prio 38），
+-- 已经盖过 mpv 默认的 seek，但模式态的路由只认 MODE_ACTION ⇒ 不显式处理就是"什么都没发生"。
+-- 编辑态（Shift+Enter）里这四个动作仍是"挪标记"，两者按状态分流。
+local MODE_ARROW_SEEK = {
+    ['edit-back1']  = { '-5', 'relative' },        -- 对应 mpv 默认 LEFT
+    ['edit-fwd1']   = { '5',  'relative' },        -- 对应 mpv 默认 RIGHT
+    ['edit-back10'] = { '-1', 'relative+exact' },  -- 对应 mpv 默认 SHIFT+LEFT
+    ['edit-fwd10']  = { '1',  'relative+exact' },  -- 对应 mpv 默认 SHIFT+RIGHT
+}
+
 local function mode_dispatch(name)
     local fn = HANDLERS[name]
     if not fn then msg.warn('标记模式：找不到动作 ' .. tostring(name)); return end
@@ -2011,6 +2022,13 @@ local function mode_dispatch(name)
         else
             msg.verbose('编辑态按键 → 忽略（模式键 ' .. tostring(name) .. '）')
         end
+        return
+    end
+    local sk = MODE_ARROW_SEEK[name]
+    if sk then
+        msg.verbose('标记模式按键 → ' .. tostring(name) .. '（按 mpv 默认前后跳）')
+        mp.commandv('seek', sk[1], sk[2])
+        log('模式态方向键 → seek %s %s（与 mpv 默认一致）', sk[1], sk[2])
         return
     end
     if MODE_ACTION[name] then
@@ -2164,7 +2182,8 @@ local function edit_move(frames)
     save_sidecar()
     edit_follow()
     render_mode_badge()
-    msg.verbose('编辑态：移动 %+d 帧 → %.3f', frames, nt)
+    -- msg.* 不做 printf（实测会把 %+d 原样打出来）→ 用 log() 助手（内部 string.format）
+    log('编辑态：移动 %+d 帧 → t=%.3f（%s）', frames, nt, m.tc)
     notify(string.format('标记 → %s', m.tc))
 end
 
@@ -2737,7 +2756,7 @@ end)
 
 write_key_template()
 check_key_conflicts()
-msg.info(string.format('source-markers 1.2.0-alpha r34 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
+msg.info(string.format('source-markers 1.2.0-alpha r35 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
     #ACTIONS, key_of('help'), key_of('toggle-panel'),
     tostring(o.sidecar), tostring(o.hide_sidecar), tostring(o.time_format),
     input and 'mp.input（播放器内输入框）' or 'python 兜底对话框'))
