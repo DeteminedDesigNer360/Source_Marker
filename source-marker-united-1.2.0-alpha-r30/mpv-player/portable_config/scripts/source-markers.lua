@@ -162,18 +162,52 @@ local function read_file(path)
 end
 
 local function write_file_atomic(path, data)
-    local tmp = path .. '.tmp'
-    local f, oserr = io.open(tmp, 'wb')
-    if not f then
-        -- 把系统给的原因一并报出来：只报路径无法区分「没有权限 / 路径过长 / 目录不存在」。
-        return false, '无法写入 ' .. tmp .. '（系统错误：' .. tostring(oserr) .. '）'
+    -- 「写 .tmp → 删原文件 → 改名」这三步在 Windows 上都可能被**瞬时占用**打断
+    -- （杀软扫描刚写出的文件、别的进程短暂打开等），系统给的就是 EACCES / "Permission denied"。
+    -- 真机上表现为"导出失败 + 视频旁 sidecar 同时写不进去"（两处都走这个函数），
+    -- 历史记录见「改动说明」§6。所以这里做三件事：
+    --   ① 最多 4 轮重试（失败时短暂等待，只等到真的失败才有开销）；
+    --   ② 仍然不行就**退化为直接覆盖写目标**（牺牲原子性，先保证能用）；
+    --   ③ 报错**点名是哪一步**失败（写临时文件 / 删原文件 / 改名 / 直接写），
+    --      这样下次复发时光看 OSD 就知道卡在哪一步。
+    local last = nil
+    for attempt = 1, 4 do
+        local tmp = path .. '.tmp'
+        local f, oserr = io.open(tmp, 'wb')
+        if not f then
+            last = string.format('第①步写临时文件失败：%s（系统错误：%s）', tmp, tostring(oserr))
+        else
+            f:write(data)
+            f:close()
+            local removed, rerr = true, nil
+            if file_exists(path) then
+                local rok
+                rok, rerr = os.remove(path)
+                if not rok then removed = false; last = string.format('第②步删除原文件失败：%s（%s）', path, tostring(rerr)) end
+            end
+            if removed then
+                local ok, err = os.rename(tmp, path)
+                if ok then
+                    if attempt > 1 then msg.verbose(string.format('写文件重试成功（第 %d 轮）：%s', attempt, path)) end
+                    return true
+                end
+                last = string.format('第③步改名失败：%s → %s（%s）', tmp, path, tostring(err))
+                os.remove(tmp)
+            end
+        end
+        if attempt < 4 then
+            local t0 = os.clock()
+            while os.clock() - t0 < 0.12 do end      -- 只在失败路径上等一下（总开销 < 0.4s）
+        end
     end
-    f:write(data)
-    f:close()
-    if file_exists(path) then os.remove(path) end
-    local ok, err = os.rename(tmp, path)
-    if not ok then return false, tostring(err) end
-    return true
+    local f2, oserr2 = io.open(path, 'wb')
+    if f2 then
+        f2:write(data)
+        f2:close()
+        msg.warn(string.format('原子写入失败，已退化为直接覆盖写：%s（%s）', path, tostring(last)))
+        return true, '（已退化为直接写入）'
+    end
+    return false, string.format('%s ／ 直接覆盖写也失败：%s', tostring(last), tostring(oserr2))
 end
 
 ----------------------------------------------------------------------
@@ -2574,7 +2608,7 @@ end)
 
 write_key_template()
 check_key_conflicts()
-msg.info(string.format('source-markers 1.2.0-alpha r29 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
+msg.info(string.format('source-markers 1.2.0-alpha r30 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
     #ACTIONS, key_of('help'), key_of('toggle-panel'),
     tostring(o.sidecar), tostring(o.hide_sidecar), tostring(o.time_format),
     input and 'mp.input（播放器内输入框）' or 'python 兜底对话框'))
