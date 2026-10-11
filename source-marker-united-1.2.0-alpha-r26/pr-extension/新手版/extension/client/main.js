@@ -1174,12 +1174,14 @@ function exportMarkers() {
           var bat = dir + '\\' + stem + '.bat';
           var content = [
             '@echo off',
-            // 不再写 cd /d "%~dp0"：%~dp0 结尾自带反斜杠，包在引号里会被 cmd 当成
-            // 转义引号 ⇒ "cannot find the path"（无害但会在 stderr 刷屏）。所有路径本来
-            // 都用 %~dp0 绝对定位，这行本来就是多余的。
-            'attrib +h "%~n0.json" > "%~dp0' + LOG_NAME + '" 2>&1',
+            // 目标必须写【绝对】路径：%~dp0 是 bat 自身所在目录（结尾自带反斜杠）。
+            // 实测教训（Node 忠实复现面板拼串时抓到）：只写 "%~n0.json" 是相对路径，
+            // 而 createProcess 起的 cmd 的当前目录【不是】bat 所在目录 → attrib 报
+            // "File not found - 1_markers.json"。改成 "%~dp0%~n0.json" 后既绝对定位，
+            // 又不会踩"结尾反斜杠 + 引号被当成转义"那个坑。
+            'attrib +h "%~dp0%~n0.json" > "%~dp0' + LOG_NAME + '" 2>&1',
             'echo --- readback --- >> "%~dp0' + LOG_NAME + '"',
-            'attrib "%~n0.json" >> "%~dp0' + LOG_NAME + '" 2>&1'
+            'attrib "%~dp0%~n0.json" >> "%~dp0' + LOG_NAME + '" 2>&1'
           ].join('\r\n') + '\r\n';
           var w = null;
           try { w = window.cep.fs.writeFile(bat, content); } catch (e) { w = null; }
