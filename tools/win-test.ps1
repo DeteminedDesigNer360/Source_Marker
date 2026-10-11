@@ -78,6 +78,22 @@ Get-ChildItem $tmp -File -Force -ErrorAction SilentlyContinue |
     Where-Object { $_.Extension -in '.png', '.log', '.json' } |
     Remove-Item -Force -ErrorAction SilentlyContinue
 Copy-Item $Media (Join-Path $tmp (Split-Path $Media -Leaf)) -Force
+# 素材旁边若已有标记文件（导出 json/csv、mpv 侧车），一并复制过去 —— 否则 mpv 起来时
+# 看不到任何标记，"跳转类"测试就无从谈起（_tmp 开跑前被整体清过，预置也没用）。
+$srcDir = Split-Path $Media -Parent
+if ($srcDir) {
+    $stem0 = [System.IO.Path]::GetFileNameWithoutExtension($Media)
+    # 注意：不能写 @($stem0 + '_a.json', $stem0 + '_b.csv') —— PowerShell 里逗号优先级高于 +，
+    # 那会变成"字符串 + 数组"，拼出一个不存在的怪名字（本会话踩到，导致标记一个都没复制过去）。
+    foreach ($suf in @('_markers.json', '_markers.csv', '.mpv-autosave.json')) {
+        $pat = $stem0 + $suf
+        $sp = Join-Path $srcDir $pat
+        if (Test-Path -LiteralPath $sp) {
+            Copy-Item -LiteralPath $sp (Join-Path $tmp $pat) -Force
+            Say ('  连同标记文件一起复制：' + $pat)
+        }
+    }
+}
 $clip = (Get-ChildItem $tmp -File -Filter '*.mp4' | Select-Object -First 1).FullName
 $stem = [System.IO.Path]::GetFileNameWithoutExtension($clip)
 $log  = Join-Path $tmp 'mpv.log'
@@ -107,7 +123,9 @@ function Resolve-Key([string]$token) {
     $k = $token
     while ($true) {
         if ($k -match '^(?i)(Ctrl|Control)\+(.+)$') { [void]$mods.Add([byte]0x11); $k = $Matches[2]; continue }
-        if ($k -match '^(?i)Shift\+(.+)$')          { [void]$mods.Add([byte]0x10); $k = $Matches[2]; continue }
+        # 注意：这里必须写成两个捕获组，与 Ctrl/Alt 两条同构 —— 只写一个组时 $Matches[2] 是 $null，
+        # 会把 $k 赋成空值，下一行 $k.ToUpper() 直接抛异常（本会话 Shift+n / Shift+m 两次踩到）。
+        if ($k -match '^(?i)(Shift)\+(.+)$')     { [void]$mods.Add([byte]0x10); $k = $Matches[2]; continue }
         if ($k -match '^(?i)Alt\+(.+)$')            { [void]$mods.Add([byte]0x12); $k = $Matches[2]; continue }
         break
     }
@@ -151,6 +169,8 @@ Start-Sleep -Milliseconds 800
 # 只数"动作行"：日志会因为帮助重绘等无关原因增长，用总行数会误判（本会话踩过）
 trap {
     Write-Output ('  ! 出错，正在收场：' + $_.Exception.Message)
+    Write-Output ('    位置：' + $_.InvocationInfo.PositionMessage)
+    Write-Output ('    调用栈：' + ($_.ScriptStackTrace -replace "`r?`n", ' | '))
     Get-Process -Name mpv,mpv.exe,mpv.com -ErrorAction SilentlyContinue |
         ForEach-Object { try { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue } catch {} }
     exit 2
@@ -213,7 +233,7 @@ foreach ($k in $Keys) {
             $note = '（重试后 ' + ($(if ($n1 -gt $n0) { '有增长' } else { '仍无增长' })) + '）'
         }
     }
-    Say ('第 ' + $idx + ' 键 ' + $k.PadRight(8) + ' 日志 ' + $n0 + ' → ' + $n1 + ' ' + $note)
+    Say ('第 ' + $idx + ' 键 ' + (("$k") -as [string]).PadRight(8) + ' 日志 ' + $n0 + ' → ' + $n1 + ' ' + $note)
     if ($ShotAfter -contains $idx) { Shoot ('after-' + ($k -replace '[^A-Za-z0-9]', '')) }
 }
 

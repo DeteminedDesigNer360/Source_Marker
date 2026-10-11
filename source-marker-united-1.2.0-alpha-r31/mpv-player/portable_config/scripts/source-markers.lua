@@ -1123,7 +1123,16 @@ local function set_color(idx)
     notify(string.format('当前颜色：%d %s', idx, color_name(idx)))
 end
 
+-- 「跳不动」的根因（真机取证，见改动说明）：
+--   面板导出的标记时间是毫秒值，常常落在两帧之间（例：1.mp4 的 0.633 秒，30.000473fps，
+--   0.633×30.000473 = 18.99 帧）。帧精确 seek 会落到"第一个 pts >= 目标"的帧 ⇒ 落在【后一帧】
+--   ⇒ 播放头比标记晚一帧 ⇒ 反方向的 step_marker 会把同一个标记再选中一次，表现为"那个方向跳不动"。
+-- 所以跳转前先把目标回退半帧：这样"第一个 pts >= 目标-半帧"必定就是标记所在的那一帧。
 local function seek_to(t)
+    local fps = get_fps()
+    if fps and fps > 0 and t and t > 0 then
+        t = math.max(0, t - 0.5 / fps)
+    end
     if o.hr_seek then
         -- 尊重用户的 mpv.conf：用户显式写了 hr-seek=no 就不要覆盖
         if mp.get_property('hr-seek') ~= 'no' then mp.set_property('hr-seek', 'yes') end
@@ -1142,6 +1151,9 @@ local function goto_marker(idx)
     end
     seek_to(S.markers[idx].t)
     notify(string.format('跳到 %d/%d  %s', idx, #S.markers, to_timecode(S.markers[idx].t, get_fps() or 25)))
+    -- 同一件事也写进日志：跳转类问题的排查必须能看出"目标序号有没有前进"
+    --（只发 notify 的话，日志里只剩"按键被路由了"，等于没证据 —— 本会话为此多绕了两轮）。
+    log('跳到 %d/%d：t=%.3f（跳前播放头=%.3f）', idx, #S.markers, S.markers[idx].t, head_time() or -1)
 end
 
 local function step_marker(delta)
@@ -1150,17 +1162,22 @@ local function step_marker(delta)
         return
     end
     local head = head_time() or 0
+    -- 用【帧号】而不是秒来比较：跳转落点与标记时间本身就差着不到一帧（面板导出的毫秒值
+    -- 多半落在帧间），用秒比会把"同一条标记"判成"还在前面/后面" ⇒ 那个方向永远跳不动。
+    local hf = frame_of(head)
     local target = nil
     if delta > 0 then
         for i, m in ipairs(S.markers) do
-            if m.t > head + 0.001 then target = i break end
+            if not hf or (frame_of(m.t) or -1) > hf then target = i break end
         end
         if not target then target = #S.markers end
+        log('next 计算：播放头=%.3f（帧 %s）→ 目标序号=%d（共 %d 条）', head, tostring(hf), target, #S.markers)
     else
         for i = #S.markers, 1, -1 do
-            if S.markers[i].t < head - 0.001 then target = i break end
+            if not hf or (frame_of(S.markers[i].t) or -1) < hf then target = i break end
         end
         if not target then target = 1 end
+        log('prev 计算：播放头=%.3f（帧 %s）→ 目标序号=%d（共 %d 条）', head, tostring(hf), target, #S.markers)
     end
     goto_marker(target)
 end
@@ -2608,7 +2625,7 @@ end)
 
 write_key_template()
 check_key_conflicts()
-msg.info(string.format('source-markers 1.2.0-alpha r30 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
+msg.info(string.format('source-markers 1.2.0-alpha r31 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
     #ACTIONS, key_of('help'), key_of('toggle-panel'),
     tostring(o.sidecar), tostring(o.hide_sidecar), tostring(o.time_format),
     input and 'mp.input（播放器内输入框）' or 'python 兜底对话框'))
