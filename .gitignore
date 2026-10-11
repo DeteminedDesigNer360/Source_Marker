@@ -17,3 +17,6 @@ _branch-work*/
 source-markers-ui.json
 _tmp/
 _tmp*
+
+# mpv 运行时会在这里写 shader 缓存 —— 属运行时状态，不入库
+**/portable_config/cache/
