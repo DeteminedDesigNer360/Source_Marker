@@ -144,3 +144,8 @@ Shift+n  script-binding source_markers/add
 3. 与**你的 `input.conf` / 其它脚本**冲突 → **警告**（以你的为准，插件那个键会失效）
 
 随时可查：`script-message keys`（打印当前生效键位 + 冲突清单）；`F1` 帮助里也会显示一行。
+
+**导出的同名 `.json` 会自动设为隐藏**（与播放器侧一致，目录里不重复扎眼）。
+面板走 CEP 的 Node 层（manifest 里已开 `--enable-nodejs`）调用 `attrib`，
+并会**回读**确认属性里确实有 `H`；结果写在面板日志里（`隐藏结果：… ｜ 回读：…`）。
+取不到 Node 时会退回旧路线，并在日志里说明原因。

@@ -1116,29 +1116,54 @@ function exportMarkers() {
            去跑 attrib —— 这条通路「用播放器打开」已经在本机验证过可用。
            仍然先检能力、再按 createProcess 的约定检查 err（r21 踩过"返回 err=3 其实没起来"）。 */
         var jp = base + '.json';
-        if (!window.cep || !window.cep.process || typeof window.cep.process.createProcess !== 'function') {
-          log('同名 JSON 未能隐藏（此 CEP 版本没有 process.createProcess）—— 不影响使用', 'warn');
-        } else {
-          /* 走 cmd 一层：attrib 直起时，若 CEP 再给参数加一层引号，路径就废了
-             —— 真机现象正是「返回 err=0（进程起来了）但文件属性没变」。
-             cmd /c 能吃掉多余引号，也顺手解决带空格的路径。
-             注意：createProcess 的 err=0 只说明【进程起来了】，不代表 attrib 干成了。 */
-          /* 真机踩过两次：
-             ① 直起 attrib.exe（绝对路径）→ err=0（进程起来了）但文件属性没变
-             ② 裸名 cmd.exe → err=3（进程根本没起来）—— CEP 的 createProcess 不查 PATH，
-                必须给绝对路径。
-             所以既给绝对路径、也留一个回退；err=0 仍只代表"起来了"，真正的结果请看目录。 */
+        /* 默认把同名 json 设为隐藏（与 mpv 侧一致，减少目录里的视觉重复）。
+           路线：优先走 CEP 的【Node 层】（manifest 里已开 --enable-nodejs）——
+             · Node 自己按 Windows 规则拼命令行，不经 cmd、也不乱加引号
+               （此前 CEP createProcess 的两次失败：err=0 但属性没变，最可能就是引号/编码）
+             · 而且能把 attrib 的 stdout/stderr/退出码捞回来 → 成没成一目了然
+             · 跑完再【回读】一次 attrib（不带 +h）确认属性里确实有 H
+           取不到 Node 时退回原来的 CEP createProcess 路线（并如实记日志）。 */
+        (function () {
+          var node = (typeof window !== 'undefined') ? window.cep_node : null;
+          if (node && typeof node.require === 'function') {
+            var cp = null;
+            try { cp = node.require('child_process'); } catch (e) { cp = null; }
+            if (cp && typeof cp.execFile === 'function') {
+              var sysRoot = (typeof process !== 'undefined' && process.env && process.env.SystemRoot) ? process.env.SystemRoot : 'C:\\Windows';
+              var attrib = sysRoot + '\\System32\\attrib.exe';
+              log('隐藏：走 Node 路线（' + attrib + '）→ ' + jp);
+              cp.execFile(attrib, ['+h', jp], { windowsHide: true }, function (err, stdout, stderr) {
+                cp.execFile(attrib, [jp], { windowsHide: true }, function (err2, out2) {
+                  var rb = String(out2 || '').trim();
+                  var hasH = /(^|[ \t])H([ \t]|$)/.test(rb);
+                  log('隐藏结果：' + (err ? ('attrib 报错：' + String(stderr || err.message).trim()) : 'attrib 无报错')
+                      + ' ｜ 回读：' + (rb || '（空）'), (err || !hasH) ? 'warn' : 'ok');
+                  if (!hasH) log('这一行是定位问题的关键（要么没有 H，要么 attrib 报了错），请发给我。', 'warn');
+                });
+              });
+              return;
+            }
+            log('CEP 的 Node 层在、但 child_process 用不了 —— 退回 createProcess 路线', 'warn');
+          } else {
+            log('此 Pr/CEP 未启用 Node（window.cep_node 不存在）→ 退回 createProcess 路线；'
+                + '若要用 Node 路线，请确认 manifest 里有 --enable-nodejs 并【重启 Pr】。', 'warn');
+          }
+          /* ---- 退回路线：CEP createProcess（保留；err=0 只代表"起来了"） ---- */
+          if (!window.cep || !window.cep.process || typeof window.cep.process.createProcess !== 'function') {
+            log('同名 JSON 未能隐藏（此 CEP 版本没有 process.createProcess）—— 不影响使用', 'warn');
+            return;
+          }
           var rawH = null, cmds = ['C:\\Windows\\System32\\cmd.exe', 'cmd.exe'];
           for (var ci = 0; ci < cmds.length && !(rawH && rawH.err === 0); ci++) {
             try {
               rawH = window.cep.process.createProcess(cmds[ci], '/c', 'attrib', '+H', '"' + jp + '"');
-              log('隐藏尝试：' + cmds[ci] + ' /c attrib +H "' + jp + '" → 返回 ' + JSON.stringify(rawH));
+              log('隐藏尝试（退回路线）：' + cmds[ci] + ' /c attrib +H "' + jp + '" → 返回 ' + JSON.stringify(rawH));
             } catch (eh) { log('隐藏异常（' + cmds[ci] + '）：' + eh.message, 'warn'); }
           }
           var spawned = !!(rawH && rawH.err === 0);
           log(spawned ? ('已请求隐藏同名 JSON（请看一眼目录确认）：' + jp)
                       : ('同名 JSON 未能隐藏（进程都没起来）—— 不影响使用'), spawned ? 'ok' : 'warn');
-        }
+        })();
       }
       var v1 = verifyExport(csvPath, n, false);
       log('回读校验 CSV → ' + v1, v1 === 'OK' ? 'ok' : 'err');
