@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "source-markers.v1.schema.json",
+  "title": "Source Markers v1",
+  "description": "标记交换格式 v1 的 JSON 载体。规范正文见 docs/marker-format.md。读取方必须忽略未知字段。",
+  "oneOf": [
+    { "$ref": "#/$defs/wrapped" },
+    { "$ref": "#/$defs/dataWrapped" },
+    { "$ref": "#/$defs/bareArray" }
+  ],
+  "$defs": {
+    "marker": {
+      "type": "object",
+      "required": ["time", "color"],
+      "properties": {
+        "time": {
+          "type": "number",
+          "minimum": 0,
+          "description": "权威值：从素材开头算起的秒数（保留 3 位小数）"
+        },
+        "tc": {
+          "type": "string",
+          "description": "展示用时间码 HH:MM:SS:FF；读取方在有 time 时必须忽略它"
+        },
+        "name": { "type": "string", "description": "短标签，可为空" },
+        "comment": { "type": "string", "description": "描述正文，可为空" },
+        "color": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 7,
+          "default": 0,
+          "description": "Premiere 标记色索引 0..7（绿红紫橙黄白蓝青）"
+        }
+      },
+      "additionalProperties": true
+    },
+    "markers": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/marker" }
+    },
+    "wrapped": {
+      "type": "object",
+      "required": ["version", "markers"],
+      "properties": {
+        "format": { "const": "source-markers" },
+        "version": { "type": "integer", "minimum": 1 },
+        "created": { "type": "string", "description": "ISO-8601 含时区" },
+        "source": {
+          "type": "object",
+          "properties": {
+            "file": { "type": "string" },
+            "fps": { "type": ["number", "null"] },
+            "durationSec": { "type": "number" },
+            "timeFormat": {
+              "enum": ["ms", "ff", "sec", "auto"],
+              "description": "写入方请求的时间格式（auto = 整数帧率且非 VFR 时用 ff，否则 ms）"
+            }
+          },
+          "additionalProperties": true
+        },
+        "markers": { "$ref": "#/$defs/markers" }
+      },
+      "additionalProperties": true
+    },
+    "dataWrapped": {
+      "type": "object",
+      "required": ["data"],
+      "properties": { "data": { "$ref": "#/$defs/markers" } },
+      "additionalProperties": true
+    },
+    "bareArray": { "$ref": "#/$defs/markers" }
+  }
+}
