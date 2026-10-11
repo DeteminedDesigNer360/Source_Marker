@@ -1157,20 +1157,33 @@ function exportMarkers() {
             return;
           }
           var cmdExe = 'C:\\Windows\\System32\\cmd.exe';
-          // 【关键】/c 必须单独作为第一个参数，命令整串作为第二个参数 —— 这才等价于
-          //   mpv 的 os.execute('attrib +h "…" 2>nul')（即 cmd /c <整串>）。
-          //   r22 的写法把 /c 放进了那个字符串里 → CEP 给含空格的参数整体加引号后，
-          //   cmd 把 "/c attrib …" 当成"带引号的程序名" → 找不到 → 进程起来了但什么都没做
-          //   （日志文件都没生成 ⇒ 面板日志显示 attrib 输出：（空））。
-          //   末尾再用不带 +h 的 attrib 打出属性，作为独立回读确认。
-          var inner = 'attrib +h "' + jp + '" > "' + logFile + '" 2>&1 & attrib "' + jp + '" >> "' + logFile + '"';
+          // 【第三次换法，也是最后一种】把命令写进 .bat 文件，只把 bat 的路径交给 createProcess。
+          //   实测：CEP 的 createProcess 跑"带引号/重定向/&的复合命令"根本执行不了
+          //   （r22：/c 塞在命令串里 → 进程起来但什么都没做；r23：/c 独立成参数 → 日志文件
+          //    压根没生成，readFile 返回 err=3）⇒ 命令内容必须彻底离开参数区。
+          //   bat 里【一个中文字符都不需要】：用 %~n0（bat 自己的文件名）来指认目标 json，
+          //   bat 与目标 json 同名（<stem>.bat ↔ <stem>.json）放在同一目录，路径靠 %~dp0 自寻址。
+          //   这样对中文名/空格目录/长路径全都免疫。
+          var dir = jp.replace(/[\\/][^\\/]*$/, '');
+          var stem = jp.replace(/^.*[\\/]/, '').replace(/\.json$/i, '');
+          var bat = dir + '\\' + stem + '.bat';
+          var content = [
+            '@echo off',
+            'cd /d "%~dp0"',
+            'attrib +h "%~n0.json" > "%~dp0sm-hide.log" 2>&1',
+            'echo --- readback --- >> "%~dp0sm-hide.log"',
+            'attrib "%~n0.json" >> "%~dp0sm-hide.log" 2>&1'
+          ].join('\r\n') + '\r\n';
+          var w = null;
+          try { w = window.cep.fs.writeFile(bat, content); } catch (e) { w = null; }
+          if (!w || w.err !== 0) { log('隐藏：写 bat 失败 err=' + JSON.stringify(w) + ' → ' + bat, 'warn'); return; }
           var r = null;
           try {
-            r = window.cep.process.createProcess(cmdExe, '/c', inner);
-            log('隐藏尝试：createProcess(cmd.exe, "/c", <命令整串>) → 返回 ' + JSON.stringify(r));
-          } catch (e) { log('隐藏异常（cmd /c + 命令整串）：' + e.message, 'warn'); }
-          if (r && r.err === 0) { setTimeout(function () { readback('cmd /c + 命令整串'); }, 900); }
-          else { log('同名 JSON 未能隐藏（进程都没起来）—— 不影响使用', 'warn'); }
+            r = window.cep.process.createProcess(cmdExe, '/c', bat);
+            log('隐藏尝试：bat 路线（只传 bat 路径）→ ' + bat + ' → 返回 ' + JSON.stringify(r));
+          } catch (e) { log('隐藏异常（bat 路线）：' + e.message, 'warn'); }
+          if (r && r.err === 0) { setTimeout(function () { readback('bat 路线'); try { window.cep.fs.deleteFile(bat); } catch (e) {} }, 900); }
+          else { try { window.cep.fs.deleteFile(bat); } catch (e) {} log('同名 JSON 未能隐藏（进程都没起来）—— 不影响使用', 'warn'); }
         })();
       }
       var v1 = verifyExport(csvPath, n, false);
