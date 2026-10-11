@@ -1127,7 +1127,13 @@ function exportMarkers() {
            所以这里照抄【整串传】的做法，并把 attrib 的输出重定向到临时文件再读回来，
            成没成、错在哪，日志里一眼可见（每个导出只多一次进程，跑完即删临时文件）。 */
         (function () {
-          var logFile = jp + '.hidetmp';
+          var dir = jp.replace(/[\\/][^\\/]*$/, '');
+          /* 日志文件名只在这里定义一次 —— r24 的教训：bat 写的是 %~dp0sm-hide.log，
+             而面板读的是 <json>.hidetmp，两处各写各的名字 ⇒ 功能其实成功了，
+             日志却说"未确认隐藏"（用户去资源管理器一看，文件早就隐藏了）。
+             现在 bat 的写入路径、面板的读取路径、清理路径三者共用这一个常量。 */
+          var LOG_NAME = 'sm-hide.log';
+          var logFile = dir + '\\' + LOG_NAME;
           function finish(ok, detail) {
             log((ok ? '隐藏结果：成功（属性里有 H）' : '隐藏结果：未确认隐藏 ') + '｜ ' + detail, ok ? 'ok' : 'warn');
             try { window.cep.fs.deleteFile(logFile); } catch (e) {}
@@ -1157,15 +1163,14 @@ function exportMarkers() {
           //   bat 里【一个中文字符都不需要】：用 %~n0（bat 自己的文件名）来指认目标 json，
           //   bat 与目标 json 同名（<stem>.bat ↔ <stem>.json）放在同一目录，路径靠 %~dp0 自寻址。
           //   这样对中文名/空格目录/长路径全都免疫。
-          var dir = jp.replace(/[\\/][^\\/]*$/, '');
           var stem = jp.replace(/^.*[\\/]/, '').replace(/\.json$/i, '');
           var bat = dir + '\\' + stem + '.bat';
           var content = [
             '@echo off',
             'cd /d "%~dp0"',
-            'attrib +h "%~n0.json" > "%~dp0sm-hide.log" 2>&1',
-            'echo --- readback --- >> "%~dp0sm-hide.log"',
-            'attrib "%~n0.json" >> "%~dp0sm-hide.log" 2>&1'
+            'attrib +h "%~n0.json" > "%~dp0' + LOG_NAME + '" 2>&1',
+            'echo --- readback --- >> "%~dp0' + LOG_NAME + '"',
+            'attrib "%~n0.json" >> "%~dp0' + LOG_NAME + '" 2>&1'
           ].join('\r\n') + '\r\n';
           var w = null;
           try { w = window.cep.fs.writeFile(bat, content); } catch (e) { w = null; }
