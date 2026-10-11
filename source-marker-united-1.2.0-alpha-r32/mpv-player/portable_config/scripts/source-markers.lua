@@ -1867,6 +1867,8 @@ local MODE_KEYS = {
     { key = 'm',            name = 'add',            label = '打标记' },
     { key = 'Shift+m',      name = 'next',           label = '下一个标记' },
     { key = 'Ctrl+Shift+m', name = 'prev',           label = '上一个标记' },
+    -- 向 Pr 源监视器看齐：Enter = 从入点播放（原本占这个键的「改正文」已移到 Shift+Enter）
+    { key = 'ENTER',       name = 'play-in',         label = '从入点播放' },
 }
 
 local EDIT_KEYS = {
@@ -1885,7 +1887,7 @@ local EDIT_KEYS = {
     { key = '4', name = 'edit-c4' }, { key = '5', name = 'edit-c5' },
     { key = '6', name = 'edit-c6' }, { key = '7', name = 'edit-c7' },
     { key = 't',     name = 'edit-text-t',     label = '改正文' },
-    { key = 'ENTER', name = 'edit-text-enter', label = '改正文' },
+    { key = 'SHIFT+ENTER', name = 'edit-text-enter', label = '改正文' },
     { key = 'DEL',   name = 'del-current',     label = '删除（模式=最近 / 编辑=这条）' },
     { key = 'ESC',   name = 'edit-exit',       label = '完成' },
 }
@@ -1899,6 +1901,7 @@ for _, spec in ipairs(EDIT_KEYS) do EDIT_ACTION[spec.name] = true end
 for _, spec in ipairs(MODE_KEYS) do MODE_ACTION[spec.name] = true end
 -- Enter 一个键两种行为：不在编辑态=进编辑态；已在编辑态=改正文（所以它两边都要可用）
 MODE_ACTION['edit-text-enter'] = true
+MODE_ACTION['play-in'] = true            -- Enter：模式态=从入点播放（编辑态里 Enter 交给 mpv 输入框提交）
 MODE_ACTION['del-current'] = true        -- 模式态=删最近的标记；编辑态=删这一条
 
 local function mode_dispatch(name)
@@ -1970,7 +1973,7 @@ local function render_mode_badge()
         local body = (m.comment and m.comment ~= '') and m.comment or '（空）'
         rows = {
             string.format('编辑标记 %s · 颜色 %s · 正文「%s」', edit_tc(m.t), color_name(m.color or 0), body),
-            '移动：, / . ±1帧 · [ / ] ±10帧 · 颜色：0-7 改【这条】(0=绿 … 7=青) · T/Enter 改正文 · DEL 删除 · ESC 完成',
+            '移动：, / . ±1帧 · [ / ] ±10帧 · 颜色：0-7 改【这条】(0=绿 … 7=青) · T/Shift+Enter 改正文 · DEL 删除 · ESC 完成',
         }
         accent = '&H7CFF7C&'
     end
@@ -2038,7 +2041,7 @@ local function edit_enter()
     edit_follow()
     render_mode_badge()
     log('进入编辑态：t=%.3f color=%s comment=%s', m.t, tostring(m.color), tostring(m.comment))
-    notify(string.format('编辑标记 %s · 0-7 改这条的颜色 · T/Enter 改正文 · ESC 完成', edit_tc(m.t)))
+    notify(string.format('编辑标记 %s · 0-7 改这条的颜色 · T/Shift+Enter 改正文 · ESC 完成', edit_tc(m.t)))
 end
 
 local function edit_move(frames)
@@ -2103,6 +2106,11 @@ HANDLERS['edit-fwd1']       = function() edit_move(1) end
 HANDLERS['edit-back10']     = function() edit_move(-10) end
 HANDLERS['edit-fwd10']      = function() edit_move(10) end
 for i = 0, 7 do HANDLERS['edit-c' .. i] = color_handler(i) end
+-- 【步骤 1 占位】Enter = 从入点播放：真正的区间播放与出入点在步骤 2/3 接入；
+-- 先只提示，用来验证键位本身（Enter 已从「改正文」腾出来交给播放）。
+HANDLERS['play-in'] = function()
+    notify('从入点播放：出入点功能即将接入（Shift+I 设入点 / Shift+O 设出点）')
+end
 HANDLERS['edit-text-t']     = edit_text
 -- Enter：不在编辑态就进编辑态，已在编辑态就改正文（只绑一个键，避免后注册覆盖前注册）
 HANDLERS['edit-text-enter'] = function()
@@ -2121,7 +2129,7 @@ local function set_marker_mode(on, quiet)
     render_mode_badge()
     if not quiet then
         if UI.mode then
-            notify('标记模式：M 打标记 · Shift+M 下一个 · Ctrl+Shift+M 上一个 · Del 删除 · F10 退出')
+            notify('标记模式：M 打标记 · Shift+M 下一个 · Ctrl+Shift+M 上一个 · Del 删除 · Enter 从入点播放 · F10 退出')
         else
             notify('已退出标记模式')
         end
@@ -2256,7 +2264,7 @@ register({ key = 'F2', name = 'toggle-panel', label = '按钮面板',
     help = '显示 / 隐藏可点击的按钮面板（鼠标党的入口）' }, function() toggle_panel() end)
 
 register({ key = 'F10', name = 'marker-mode', label = '标记模式',
-    help = '开关标记模式：开启后 M 打标记 / Shift+M 下一个 /\nCtrl+Shift+M 上一个 / Del 删除（右下角有小标）' }, function()
+    help = '开关标记模式：开启后 M 打标记 / Shift+M 下一个 /\nCtrl+Shift+M 上一个 / Del 删除 / Enter 从入点播放（右下角有小标）' }, function()
     set_marker_mode()
 end)
 
@@ -2331,7 +2339,7 @@ msg.info('颜色表来源：' .. COLOR_TABLE_STATE)
 
 -- ③标记模式：沿用上次会话的开关（quiet=true，启动时不弹提示；徽标由 time-pos 观察者兜底重绘）
 set_marker_mode(UI.mode == true, true)
-msg.info('标记模式：' .. key_of('marker-mode') .. ' 开关（M 打标记 / Shift+M 下一个 / Ctrl+Shift+M 上一个 / Del 删除）'
+msg.info('标记模式：' .. key_of('marker-mode') .. ' 开关（M 打标记 / Shift+M 下一个 / Ctrl+Shift+M 上一个 / Del 删除 / Enter 从入点播放）'
     .. '；注意：用户自定义 input.conf 的优先级更高，会盖掉这些裸键')
 
 -- 脚本消息（外部工具 / 自动化测试用；与按钮、快捷键走同一批处理函数）
@@ -2625,7 +2633,7 @@ end)
 
 write_key_template()
 check_key_conflicts()
-msg.info(string.format('source-markers 1.2.0-alpha r31 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
+msg.info(string.format('source-markers 1.2.0-alpha r32 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
     #ACTIONS, key_of('help'), key_of('toggle-panel'),
     tostring(o.sidecar), tostring(o.hide_sidecar), tostring(o.time_format),
     input and 'mp.input（播放器内输入框）' or 'python 兜底对话框'))
