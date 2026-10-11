@@ -1100,6 +1100,10 @@ local function set_out_point()
     notify('设出点：' .. inout_summary() .. cleared)
     log('设置出点：帧 %d t=%.3f%s', OUT_FRAME, frame_seconds(OUT_FRAME), cleared)
 end
+-- 区间武装：Enter 从入点播放时置位；到出点自动解除（解除后 Space 可自由续播）。
+-- 「区间不消失」= 出入点本身一直保留；武装只是一个一次性的播放约束。
+local RANGE_ARMED = false
+
 local function clear_inout()
     IN_FRAME, OUT_FRAME = nil, nil
     notify('已清除出入点')
@@ -1222,6 +1226,46 @@ local function step_marker(delta)
         log('prev 计算：播放头=%.3f（帧 %s）→ 目标序号=%d（共 %d 条）', head, tostring(hf), target, #S.markers)
     end
     goto_marker(target)
+end
+
+-- ── 第 7 条 步骤 3：区间播放（向 Pr 源监视器看齐）──────────────────────
+--   Enter  → 播放头吸到入点并开始播，同时【武装】区间
+--   到出点 → 自动暂停（再补一次精确 seek 保证停在出点上）+ 自动解除武装
+--   解除后 → Space 正常续播且不再被区间拦住；出入点保留，再按 Enter 重新武装
+-- 这里单开一个 time-pos 观察者（mpv 允许同属性多个观察者），不动原来那个兜底重绘。
+local function range_tick()
+    if not RANGE_ARMED then return end
+    if not IN_FRAME or not OUT_FRAME then return end
+    local fps = get_fps() or 25
+    local outsec = frame_seconds(OUT_FRAME)
+    local t = head_time()
+    if not t or t < outsec then return end
+    mp.set_property('pause', 'yes')
+    seek_to(outsec)
+    RANGE_ARMED = false
+    notify('已到出点，暂停（区间保留：Space 继续 / Enter 重新开始）')
+    log('到达出点，已暂停：t=%.3f 出点=%.3f（区间已解除）', t, outsec)
+    if render_mode_badge then render_mode_badge() end
+end
+mp.observe_property('time-pos', 'number', function() range_tick() end)
+
+local function play_from_in()
+    if not IN_FRAME then
+        notify('还没有入点：Shift+I 设入点 / Shift+O 设出点')
+        log('从入点播放：还没有入点')
+        return
+    end
+    local fps = get_fps() or 25
+    local insec = frame_seconds(IN_FRAME)
+    seek_to(insec)
+    mp.set_property('pause', 'no')
+    RANGE_ARMED = true
+    local tail = OUT_FRAME and (' → ' .. to_timecode(frame_seconds(OUT_FRAME), fps))
+                          or '（未设出点，不受限）'
+    notify('从入点播放 ' .. to_timecode(insec, fps) .. tail)
+    log('从入点播放：入点帧 %d t=%.3f ｜ 出点%s', IN_FRAME, insec,
+        OUT_FRAME and ('帧 ' .. OUT_FRAME .. string.format(' t=%.3f', frame_seconds(OUT_FRAME))) or '未设（不受限）')
+    if render_mode_badge then render_mode_badge() end
 end
 
 local function delete_nearest()
@@ -2022,6 +2066,10 @@ local function render_mode_badge()
     end
     local size = math.max(14, math.floor(ui_font() * 0.85))
     local rows = { '标记模式　F10 退出' }
+    -- 出入点常驻显示（区间"保留"必须看得见；武装中额外标出）
+    if IN_FRAME or OUT_FRAME then
+        rows[#rows + 1] = inout_summary() .. (RANGE_ARMED and '　▶ 区间播放中' or '')
+    end
     local accent = '&H4DE0FF&'
     if UI.edit then
         local m = UI.edit
@@ -2166,9 +2214,7 @@ for i = 0, 7 do HANDLERS['edit-c' .. i] = color_handler(i) end
 HANDLERS['in-set']      = set_in_point
 HANDLERS['out-set']     = set_out_point
 HANDLERS['inout-clear'] = clear_inout
-HANDLERS['play-in'] = function()
-    notify('从入点播放：出入点功能即将接入（Shift+I 设入点 / Shift+O 设出点）')
-end
+HANDLERS['play-in'] = play_from_in
 HANDLERS['edit-text-t']     = edit_text
 -- Enter：不在编辑态就进编辑态，已在编辑态就改正文（只绑一个键，避免后注册覆盖前注册）
 HANDLERS['edit-text-enter'] = function()
@@ -2187,7 +2233,7 @@ local function set_marker_mode(on, quiet)
     render_mode_badge()
     if not quiet then
         if UI.mode then
-            notify('标记模式：M 打标记 · Shift+M 下一个 · Ctrl+Shift+M 上一个 · Del 删除 · Enter 从入点播放 · Shift+I/O 设出入点 · F10 退出')
+            notify('标记模式：M 打标记 · Shift+M 下一个 · Ctrl+Shift+M 上一个 · Del 删除 · Enter 从入点播放 · Shift+I/O 设出入点 · Shift+DEL 清除 · F10 退出')
         else
             notify('已退出标记模式')
         end
@@ -2691,7 +2737,7 @@ end)
 
 write_key_template()
 check_key_conflicts()
-msg.info(string.format('source-markers 1.2.0-alpha r33 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
+msg.info(string.format('source-markers 1.2.0-alpha r34 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
     #ACTIONS, key_of('help'), key_of('toggle-panel'),
     tostring(o.sidecar), tostring(o.hide_sidecar), tostring(o.time_format),
     input and 'mp.input（播放器内输入框）' or 'python 兜底对话框'))
