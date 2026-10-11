@@ -94,8 +94,8 @@ public class WinTestKeys {
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
-  public static void Down(byte vk){ keybd_event(vk, 0, 0, UIntPtr.Zero); }
-  public static void Up(byte vk){ keybd_event(vk, 0, 2, UIntPtr.Zero); }
+  public static void Down(byte vk, bool ext){ keybd_event(vk, 0, ext ? 1u : 0u, UIntPtr.Zero); }
+  public static void Up(byte vk, bool ext){ keybd_event(vk, 0, ext ? 3u : 2u, UIntPtr.Zero); }
 }
 "@
 try { Add-Type -TypeDefinition $cs -ErrorAction Stop } catch { }
@@ -109,18 +109,22 @@ function Resolve-Key([string]$token) {
         if ($k -match '^(?i)Alt\+(.+)$')            { [void]$mods.Add([byte]0x12); $k = $Matches[2]; continue }
         break
     }
+    # 方向键 / DEL / HOME / END / INS / PGUP / PGDN 是"扩展键"，注入时必须带
+    # KEYEVENTF_EXTENDEDKEY(0x1)，否则 mpv 收到的不是同一个键 —— 本会话就因为这个
+    # 误判过"方向键在 mpv 里被默认绑定占住"（其实是我的注入错了）。
     $named = @{
         'F1'=0x70;'F2'=0x71;'F3'=0x72;'F10'=0x79;'F11'=0x7A;'F12'=0x7B;
-        'ENTER'=0x0D;'ESC'=0x1B;'TAB'=0x09;'SPACE'=0x20;'BACKSPACE'=0x08;
-        'LEFT'=0x25;'UP'=0x26;'RIGHT'=0x27;'DOWN'=0x28;'DEL'=0x2E;'HOME'=0x24;'END'=0x23
+        'ENTER'=0x0D;'ESC'=0x1B;'TAB'=0x09;'SPACE'=0x20;'BACKSPACE'=0x08
     }
+    $ext = @{ 'LEFT'=0x25;'UP'=0x26;'RIGHT'=0x27;'DOWN'=0x28;'DEL'=0x2E;'HOME'=0x24;'END'=0x23;'INS'=0x2D;'PGUP'=0x21;'PGDN'=0x22 }
     $up = $k.ToUpper()
-    if ($named.ContainsKey($up)) { return @{ Mods = $mods; Vk = [byte]$named[$up] } }
+    if ($named.ContainsKey($up)) { return @{ Mods = $mods; Vk = [byte]$named[$up]; Ext = $false } }
+    if ($ext.ContainsKey($up))   { return @{ Mods = $mods; Vk = [byte]$ext[$up];   Ext = $true  } }
     if ($k.Length -eq 1) {
         $c = $k.ToUpper()
-        if ($c -match '^[A-Z0-9]$') { return @{ Mods = $mods; Vk = [byte][int][char]$c } }
+        if ($c -match '^[A-Z0-9]$') { return @{ Mods = $mods; Vk = [byte][int][char]$c; Ext = $false } }
         $punct = @{ ','=0xBC; '.'=0xBE; '/'=0xBF; ';'=0xBA; '['=0xDB; ']'=0xDD; '\'=0xDC; '-'=0xBD; '='=0xBB }
-        if ($punct.ContainsKey($k)) { return @{ Mods = $mods; Vk = [byte]$punct[$k] } }
+        if ($punct.ContainsKey($k)) { return @{ Mods = $mods; Vk = [byte]$punct[$k]; Ext = $false } }
     }
     return $null
 }
@@ -163,10 +167,11 @@ function Send-One([string]$token) {
     if (-not $spec) { throw ('不认识这个键：' + $token) }
     [WinTestKeys]::SetForegroundWindow($h) | Out-Null
     Start-Sleep -Milliseconds 250
-    foreach ($m in $spec.Mods) { [WinTestKeys]::Down($m); Start-Sleep -Milliseconds 40 }
-    [WinTestKeys]::Down($spec.Vk); Start-Sleep -Milliseconds 90; [WinTestKeys]::Up($spec.Vk)
+    $ex = [bool]$spec.Ext
+    foreach ($m in $spec.Mods) { [WinTestKeys]::Down($m, $false); Start-Sleep -Milliseconds 40 }
+    [WinTestKeys]::Down($spec.Vk, $ex); Start-Sleep -Milliseconds 90; [WinTestKeys]::Up($spec.Vk, $ex)
     Start-Sleep -Milliseconds 40
-    for ($i = $spec.Mods.Count - 1; $i -ge 0; $i--) { [WinTestKeys]::Up($spec.Mods[$i]) }
+    for ($i = $spec.Mods.Count - 1; $i -ge 0; $i--) { [WinTestKeys]::Up($spec.Mods[$i], $false) }
 }
 
 $shots = New-Object System.Collections.ArrayList

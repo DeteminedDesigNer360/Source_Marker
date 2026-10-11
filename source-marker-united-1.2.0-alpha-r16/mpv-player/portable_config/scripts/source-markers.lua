@@ -1709,7 +1709,6 @@ local MODE_KEYS = {
     { key = 'm',            name = 'add',            label = '打标记' },
     { key = 'Shift+m',      name = 'next',           label = '下一个标记' },
     { key = 'Ctrl+Shift+m', name = 'prev',           label = '上一个标记' },
-    { key = 'DEL',          name = 'delete-nearest', label = '删除标记' },
 }
 
 local EDIT_KEYS = {
@@ -1729,7 +1728,7 @@ local EDIT_KEYS = {
     { key = '6', name = 'edit-c6' }, { key = '7', name = 'edit-c7' },
     { key = 't',     name = 'edit-text-t',     label = '改正文' },
     { key = 'ENTER', name = 'edit-text-enter', label = '改正文' },
-    { key = 'DEL',   name = 'edit-del',        label = '删除这条' },
+    { key = 'DEL',   name = 'del-current',     label = '删除（模式=最近 / 编辑=这条）' },
     { key = 'ESC',   name = 'edit-exit',       label = '完成' },
 }
 local overlay_mode = new_overlay()
@@ -1742,6 +1741,7 @@ for _, spec in ipairs(EDIT_KEYS) do EDIT_ACTION[spec.name] = true end
 for _, spec in ipairs(MODE_KEYS) do MODE_ACTION[spec.name] = true end
 -- Enter 一个键两种行为：不在编辑态=进编辑态；已在编辑态=改正文（所以它两边都要可用）
 MODE_ACTION['edit-text-enter'] = true
+MODE_ACTION['del-current'] = true        -- 模式态=删最近的标记；编辑态=删这一条
 
 local function mode_dispatch(name)
     local fn = HANDLERS[name]
@@ -1948,7 +1948,11 @@ HANDLERS['edit-text-t']     = edit_text
 HANDLERS['edit-text-enter'] = function()
     if UI.edit then edit_text() else edit_enter() end
 end
-HANDLERS['edit-del']        = edit_delete
+-- DEL 只绑一次（绑两次会被后注册的覆盖，ENTER 就是这么坏掉的）：
+-- 不在编辑态时等价于原来的"删最近的标记"，在编辑态时删当前这条。
+HANDLERS['del-current'] = function()
+    if UI.edit then edit_delete() else delete_nearest() end
+end
 
 local function set_marker_mode(on, quiet)
     UI.mode = (on == nil) and (not UI.mode) or (on == true)
