@@ -1722,10 +1722,11 @@ local EDIT_KEYS = {
     { key = '.',         name = 'edit-fwd1',       label = '+1 帧' },
     { key = '[',         name = 'edit-back10',     label = '-10 帧' },
     { key = ']',         name = 'edit-fwd10',      label = '+10 帧' },
-    { key = '1', name = 'edit-c1' }, { key = '2', name = 'edit-c2' },
-    { key = '3', name = 'edit-c3' }, { key = '4', name = 'edit-c4' },
-    { key = '5', name = 'edit-c5' }, { key = '6', name = 'edit-c6' },
-    { key = '7', name = 'edit-c7' }, { key = '8', name = 'edit-c8' },
+    -- 颜色索引跟格式契约一致：0..7（0=绿 1=红 2=紫 3=橙 4=黄 5=白 6=蓝 7=青）
+    { key = '0', name = 'edit-c0' }, { key = '1', name = 'edit-c1' },
+    { key = '2', name = 'edit-c2' }, { key = '3', name = 'edit-c3' },
+    { key = '4', name = 'edit-c4' }, { key = '5', name = 'edit-c5' },
+    { key = '6', name = 'edit-c6' }, { key = '7', name = 'edit-c7' },
     { key = 't',     name = 'edit-text-t',     label = '改正文' },
     { key = 'ENTER', name = 'edit-text-enter', label = '改正文' },
     { key = 'DEL',   name = 'edit-del',        label = '删除这条' },
@@ -1809,7 +1810,7 @@ local function render_mode_badge()
         local body = (m.comment and m.comment ~= '') and m.comment or '（空）'
         rows = {
             string.format('编辑标记 %s · 颜色 %s · 正文「%s」', edit_tc(m.t), color_name(m.color or 0), body),
-            '←/→ 或 , / . ±1帧 · [ / ] ±10帧 · 1-8 改【这条】的颜色 · T/Enter 改正文 · Del 删除 · Esc 完成',
+            '移动：, / . ±1帧 · [ / ] ±10帧 · 颜色：0-7 改【这条】(0=绿 … 7=青) · T/Enter 改正文 · DEL 删除 · ESC 完成',
         }
         accent = '&H7CFF7C&'
     end
@@ -1877,7 +1878,7 @@ local function edit_enter()
     edit_follow()
     render_mode_badge()
     log('进入编辑态：t=%.3f color=%s comment=%s', m.t, tostring(m.color), tostring(m.comment))
-    notify(string.format('编辑标记 %s · 1-8 改这条的颜色 · T/Enter 改正文 · Esc 完成', edit_tc(m.t)))
+    notify(string.format('编辑标记 %s · 0-7 改这条的颜色 · T/Enter 改正文 · ESC 完成', edit_tc(m.t)))
 end
 
 local function edit_move(frames)
@@ -1941,7 +1942,7 @@ HANDLERS['edit-back1']      = function() edit_move(-1) end
 HANDLERS['edit-fwd1']       = function() edit_move(1) end
 HANDLERS['edit-back10']     = function() edit_move(-10) end
 HANDLERS['edit-fwd10']      = function() edit_move(10) end
-for i = 1, 8 do HANDLERS['edit-c' .. i] = color_handler(i) end
+for i = 0, 7 do HANDLERS['edit-c' .. i] = color_handler(i) end
 HANDLERS['edit-text-t']     = edit_text
 -- Enter：不在编辑态就进编辑态，已在编辑态就改正文（只绑一个键，避免后注册覆盖前注册）
 HANDLERS['edit-text-enter'] = function()
