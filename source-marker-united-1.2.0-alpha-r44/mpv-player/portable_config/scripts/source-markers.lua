@@ -1796,7 +1796,7 @@ local function show_help(state)
     -- 顶部两条静态说明也必须折行 —— 否则会顶出框宽被裁掉（用户上机实测反馈：这两行超出边界）
     local hints = {
         '鼠标党按 ' .. key_of('toggle-panel') .. ' 开 / 关 OSD，' .. key_of('switch-osd')
-            .. ' 在「按钮面板」和「Pr 风格控制栏」之间换样式；两种都能点。',
+            .. ' 换样式（Pr 风格 = 控制栏；老样式 = 按钮面板 + mpv 自带播放条）；两种都能点。',
         'Pr 风格控制栏按钮（左→右）：上一个标记 · 打标记 · 下一个标记 · 标记入点 · 标记出点 · 转到入点 · 后退一帧 · 播放/暂停 · 向前一帧 · 转到出点 · 截取当前帧',
     }
     local hint_lines = {}
@@ -2199,6 +2199,18 @@ local function render_prbar()
     end
 end
 
+-- 第 9 条：内置 OSC 跟随样式 —— 老样式（按钮面板）要 mpv 自带的底部播放条；
+-- Pr 风格（控制栏 + 时间轴）用我们自己的，就把内置 OSC 关掉。
+-- 实测：`set osc no/yes` 能在运行时卸载/加载 @osc.lua（日志有 Unloading/Loading script @osc.lua），
+-- 所以不用重启 mpv。老面板本来就带 osc_safe_margin（当年为躲 OSC 做的避让）⇒ 正好回到它的设计环境。
+local function apply_osc_for_style()
+    local want = (UI.style == 'prbar') and 'no' or 'yes'
+    if mp.get_property('osc') ~= want then
+        mp.set_property('osc', want)
+        log('内置 OSC → %s（当前样式 %s）', want, UI.style)
+    end
+end
+
 -- 两种样式各自"是否显示"；打开一个就关掉另一个（互斥只在这一处定义）
 local function ui_style_shown(style)
     return (style == 'prbar') and UI.bar or UI.panel
@@ -2237,6 +2249,7 @@ end
 local function switch_osd_style()
     UI.style = (UI.style == 'prbar') and 'panel' or 'prbar'
     ui_set_shown(UI.style, true)
+    apply_osc_for_style()          -- 换样式 = 连内置播放条一起换（老样式要 OSC，Pr 风格不要）
     render_panel()
     render_prbar()
     -- 状态机必须把"切到哪"打进日志（否则"没反应"和"切错了"分不清）
@@ -2915,6 +2928,10 @@ end
 
 load_ui_state()
 
+-- 第 9 条：启动时也按保存的样式校准内置 OSC
+-- （老的 ui.json 没有 style 字段 ⇒ 默认 panel ⇒ 这里把 OSC 打开，与升级前的观感一致）
+apply_osc_for_style()
+
 ----------------------------------------------------------------------
 -- ①共享颜色表：只读一次（改颜色表要重启 mpv，与"改配置要重启"一致）
 apply_shared_colors()
@@ -3208,6 +3225,7 @@ mp.register_script_message('state', function()
         panel = UI.panel,
         osd_style = UI.style,
         osd_bar = UI.bar,
+        osc = mp.get_property('osc'),
         help = UI.help,
         hide_sidecar = o.hide_sidecar,
         input = input and 'mp.input' or 'fallback',
@@ -3260,7 +3278,7 @@ end)
 
 write_key_template()
 check_key_conflicts()
-msg.info(string.format('source-markers 1.2.0-alpha r43 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
+msg.info(string.format('source-markers 1.2.0-alpha r44 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
     #ACTIONS, key_of('help'), key_of('toggle-panel'),
     tostring(o.sidecar), tostring(o.hide_sidecar), tostring(o.time_format),
     input and 'mp.input（播放器内输入框）' or 'python 兜底对话框'))
