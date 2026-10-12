@@ -2419,6 +2419,16 @@ local function edit_enter()
     notify(string.format('编辑标记 %s · 0-7 改这条的颜色 · T/Shift+Enter 改正文 · ESC 完成', edit_tc(m.t)))
 end
 
+-- 打开"指定那一条"的编辑态（edit_enter 找的是播放头附近那条；这里要精确到某一帧的那条）
+local function edit_enter_marker(m)
+    UI.edit = m
+    edit_follow()
+    render_mode_badge()
+    log('进入编辑态（同帧已有标记）：t=%.3f color=%s comment=%s', m.t, tostring(m.color), tostring(m.comment))
+    notify(string.format('这一帧已有标记 → 直接编辑它 %s · 0-7 改色 · T/Shift+Enter 改正文 · ,/. 挪帧 · ESC 完成',
+        edit_tc(m.t)))
+end
+
 local function edit_move(frames)
     local m = UI.edit
     if not m then return end
@@ -2548,6 +2558,27 @@ local function set_marker_mode(on, quiet)
     if save_ui_state then save_ui_state() end
 end
 
+-- 与 Pr 一致：在**已有标记**的位置按「打标记」→ 不打新的，而是**打开这一条的编辑**
+-- （Pr 里按 M 落在已有标记上就是弹它的编辑框）。键位 M / Ctrl+m / 面板按钮 / 控制栏第一个按钮
+-- 全都走 HANDLERS['add']，所以只改注册处那一行即可覆盖四条路径。
+local function add_or_edit()
+    local t = head_time()
+    local idx = t and marker_at_same_frame(t) or nil
+    if not idx then
+        add_marker(nil)
+        return
+    end
+    local m = S.markers[idx]
+    if UI.edit == m then
+        notify('已经在编辑这一条：ESC 完成')
+        return
+    end
+    if not UI.mode then
+        set_marker_mode(true, true)      -- 编辑态要靠标记模式的键位接管（quiet：下面统一提示）
+    end
+    edit_enter_marker(m)
+end
+
 
 
 -- 面板 / 帮助 / 标记模式徽标的重绘入口：给「改了状态但没经过鼠标事件」的路径用（例如切换颜色）
@@ -2599,7 +2630,8 @@ local function register(action, handler)
 end
 
 register({ key = 'Ctrl+m', name = 'add', label = '打标记',
-    help = '在播放头打一个标记（用当前颜色）；同一帧不会重复打' }, function() add_marker(nil) end)
+    help = '在播放头打一个标记（用当前颜色）；同一帧不会重复打 —— 这一帧已有标记时，直接打开它的编辑（与 Pr 一致）' },
+    function() add_or_edit() end)
 
 register({ key = 'Alt+m', name = 'add-prompt', label = '打标记 + 正文',
     help = '打标记并输入正文 —— 正文会成为 Pr 里的标记名' }, function()
@@ -3106,7 +3138,7 @@ end)
 
 write_key_template()
 check_key_conflicts()
-msg.info(string.format('source-markers 1.2.0-alpha r40 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
+msg.info(string.format('source-markers 1.2.0-alpha r41 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
     #ACTIONS, key_of('help'), key_of('toggle-panel'),
     tostring(o.sidecar), tostring(o.hide_sidecar), tostring(o.time_format),
     input and 'mp.input（播放器内输入框）' or 'python 兜底对话框'))
