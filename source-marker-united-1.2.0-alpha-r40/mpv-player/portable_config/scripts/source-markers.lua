@@ -2060,8 +2060,19 @@ local function prbar_metrics()
              bpad = bpad, bar_w = bar_w, bar_h = bar_h, x = x, y = y }
 end
 
+-- 控制栏按钮的鼠标区域：重绘时先全部关掉，再按需打开（置灰的按钮不注册）
+local BAR_SECTIONS = {}
+local PRBAR_BOX_SIG = nil          -- 命中框的指纹：只在变化时打日志（给自动化测试算坐标用）
+local function bar_sections_off()
+    for _, sec in pairs(BAR_SECTIONS) do
+        mp.commandv('disable-section', sec)
+        mp.set_mouse_area(0, 0, 0, 0, sec)
+    end
+end
+
 local function render_prbar()
     local m = prbar_metrics()
+    bar_sections_off()
     if not (UI.bar and UI.style == 'prbar') then
         PRBAR_BUTTONS = {}
         set_overlay(overlay_bar, nil, m.w, m.h)
@@ -2086,11 +2097,37 @@ local function render_prbar()
         for _, poly in ipairs(ICONS[key] or {}) do
             lines[#lines + 1] = poly_line(bx + m.pad, by + m.pad, m.icon / 20, fg, '00', poly)
         end
-        buttons[#buttons + 1] = { name = 'bar:' .. b.name, label = b.label,
+        buttons[#buttons + 1] = { name = 'bar:' .. b.name, act = b.name, label = b.label,
                                   x = bx, y = by, w = m.cell, h = m.cell, disabled = disabled }
     end
     set_overlay(overlay_bar, lines, m.w, m.h)
     PRBAR_BUTTONS = buttons
+
+    -- 注册鼠标区域：与旧面板同一套机制（每个按钮一个 section，mbtn_left → script-binding）。
+    -- 置灰的按钮**不注册**（点了不该有反应）；section 名字记住，下次重绘好统一关掉。
+    for _, b in ipairs(buttons) do
+        if not b.disabled then
+            local id = 'bar-' .. b.act
+            b.section = 'sm_' .. id:gsub('%-', '_')
+            BAR_SECTIONS[b.act] = b.section
+            mp.commandv('define-section', b.section,
+                'mbtn_left script-binding ' .. BIND_PREFIX .. id, 'force')
+            mp.commandv('enable-section', b.section)
+            mp.set_mouse_area(b.x, b.y, b.x + b.w, b.y + b.h, b.section)
+        end
+    end
+
+    -- 命中框只在"变了"时打进日志（窗口缩放 / 换样式 / 出入点被设或清）：自动化测试靠它算点击坐标
+    local sig = {}
+    for _, b in ipairs(buttons) do
+        sig[#sig + 1] = string.format('%s=%d,%d,%d,%d%s', b.act, b.x, b.y, b.w, b.h,
+            b.disabled and ',off' or '')
+    end
+    local s = table.concat(sig, ' ')
+    if s ~= PRBAR_BOX_SIG then
+        PRBAR_BOX_SIG = s
+        msg.verbose(string.format('控制栏按钮框：osd=%dx%d %s', m.w, m.h, s))
+    end
 end
 
 -- 两种样式各自"是否显示"；打开一个就关掉另一个（互斥只在这一处定义）
@@ -2462,6 +2499,40 @@ HANDLERS['del-current'] = function()
     if UI.edit then edit_delete() else delete_nearest() end
 end
 
+-- ── 第 8 条 步骤 3：控制栏按钮的鼠标点击 ──────────────────────────────
+-- 与旧面板同一套机制（每个按钮一个 section、里面 mbtn_left 指向一个 script-binding）。
+-- 这里每个按钮注册一个**无键绑定**：mp.add_key_binding 的 key 传 nil ⇒ 只能被
+-- script-binding 触发，**不占任何键**，也不出现在帮助 / 面板 / 键位表里。
+local function bar_run(name)
+    local fn = HANDLERS[name]
+    if not fn then msg.warn('控制栏：找不到动作 ' .. tostring(name)); return end
+    log('控制栏点击 → %s', tostring(name))
+    fn()
+end
+
+-- 「转到入/出点」「前后一帧」「播放/暂停」在标记模式里才有键位，而控制栏是常显的 ⇒ 补等价动作
+HANDLERS['goto-in'] = function()
+    if not IN_FRAME then notify('还没有入点（Shift+I 设入点）'); return end
+    seek_to(frame_seconds(IN_FRAME))
+    log('控制栏：转到入点 帧 %d t=%.3f', IN_FRAME, frame_seconds(IN_FRAME))
+end
+HANDLERS['goto-out'] = function()
+    if not OUT_FRAME then notify('还没有出点（Shift+O 设出点）'); return end
+    seek_to(frame_seconds(OUT_FRAME))
+    log('控制栏：转到出点 帧 %d t=%.3f', OUT_FRAME, frame_seconds(OUT_FRAME))
+end
+HANDLERS['back1'] = function() mp.commandv('frame-back-step') end
+HANDLERS['fwd1']  = function() mp.commandv('frame-step') end
+HANDLERS['play']  = function() mp.commandv('cycle', 'pause') end
+
+for _, spec in ipairs(PRBAR_BTN) do
+    local ok, err = pcall(mp.add_key_binding, nil, 'bar-' .. spec.name,
+        function() bar_run(spec.name) end)
+    if not ok then
+        msg.warn(string.format('控制栏按钮绑定失败（bar-%s）：%s', spec.name, tostring(err)))
+    end
+end
+
 local function set_marker_mode(on, quiet)
     UI.mode = (on == nil) and (not UI.mode) or (on == true)
     if not UI.mode and UI.edit then edit_exit(true) end      -- 关模式就别留着编辑态
@@ -2489,6 +2560,7 @@ end
 
 -- 悬停高亮：鼠标位置变化时只重绘必要的部分
 local hover_pending = false
+local MOUSE_LOG_AT, MOUSE_LAST = 0, { -1, -1 }
 local function on_mouse_pos(_, pos)
     if (not UI.panel and not UI.bar) or type(pos) ~= 'table' then return end
     local mx, my = tonumber(pos.x) or 0, tonumber(pos.y) or 0
@@ -2496,6 +2568,14 @@ local function on_mouse_pos(_, pos)
     local lists = UI.bar and PRBAR_BUTTONS or PANEL_BUTTONS
     for _, b in ipairs(lists) do
         if mx >= b.x and mx <= b.x + b.w and my >= b.y and my <= b.y + b.h then hit = b.name break end
+    end
+    -- 诊断：鼠标位置只要动了就记一行（0.25s 节流）—— 鼠标类问题只能靠这条中间量
+    local now = os.clock()
+    if now - MOUSE_LOG_AT > 0.25
+        and (math.abs(mx - MOUSE_LAST[1]) > 2 or math.abs(my - MOUSE_LAST[2]) > 2) then
+        MOUSE_LOG_AT = now
+        MOUSE_LAST = { mx, my }
+        msg.verbose(string.format('鼠标 %d,%d → 悬停 %s', mx, my, hit and tostring(hit) or '（空白）'))
     end
     if hit ~= UI.hover then
         UI.hover = hit
@@ -2937,7 +3017,31 @@ mp.register_script_message('prbar', function()
     msg.verbose(string.format('控制栏载荷：style=%s bar=%s panel=%s in=%s out=%s',
         tostring(UI.style), tostring(UI.bar), tostring(UI.panel),
         tostring(IN_FRAME), tostring(OUT_FRAME)))
+    -- 按钮命中框（自动化测试要靠它算出"点哪里"；off = 置灰、不响应点击）
+    local boxes = {}
+    for _, b in ipairs(PRBAR_BUTTONS) do
+        boxes[#boxes + 1] = string.format('%s=%d,%d,%d,%d%s', b.act, b.x, b.y, b.w, b.h,
+            b.disabled and ',off' or '')
+    end
+    msg.verbose('控制栏按钮：' .. table.concat(boxes, ' '))
     msg.verbose('控制栏 ASS: ' .. tostring((overlay_bar and overlay_bar.data) or ''))
+end)
+-- 第 8 条：命中测试钩子 —— 给一个坐标，回报它落在哪个按钮上（供自动化断言命中框的位置/不重叠）。
+-- 环境不允许注入鼠标时（本机 DSH 沙箱里 SetCursorPos 直接返回 false），这是唯一能验命中框的办法。
+mp.register_script_message('hit', function(x, y)
+    local mx, my = tonumber(x) or -1, tonumber(y) or -1
+    local hit, marks = '（无）', {}
+    for _, b in ipairs(PRBAR_BUTTONS) do
+        local inside = (mx >= b.x and mx <= b.x + b.w and my >= b.y and my <= b.y + b.h)
+        if b.disabled then
+            -- 几何上落在框里，但**点了不会有反应**（没注册鼠标区域）⇒ 报告为禁
+            marks[#marks + 1] = string.format('%s=%s', b.act, inside and '禁' or '-')
+        else
+            marks[#marks + 1] = string.format('%s=%s', b.act, inside and 'HIT' or '-')
+            if inside and hit == '（无）' then hit = b.act end
+        end
+    end
+    msg.verbose(string.format('命中测试 %d,%d → %s ｜ %s', mx, my, hit, table.concat(marks, ' ')))
 end)
 mp.register_script_message('state', function()
     print(json_encode({
@@ -3002,7 +3106,7 @@ end)
 
 write_key_template()
 check_key_conflicts()
-msg.info(string.format('source-markers 1.2.0-alpha r39 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
+msg.info(string.format('source-markers 1.2.0-alpha r40 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
     #ACTIONS, key_of('help'), key_of('toggle-panel'),
     tostring(o.sidecar), tostring(o.hide_sidecar), tostring(o.time_format),
     input and 'mp.input（播放器内输入框）' or 'python 兜底对话框'))

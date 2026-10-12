@@ -33,7 +33,9 @@ param(
     [switch]$KeepUiState,
     [switch]$KeepTmp,
     [switch]$RetryFailedKeys,
-    [int]$StartupSec = 10
+    [int]$StartupSec = 10,
+    # 第 8 条：鼠标点击（每项写成 x,y，窗口客户区坐标）；用于验证 OSD 按钮的命中框
+    [string[]]$ClickAt = @()
 )
 $ErrorActionPreference = 'Stop'
 $NL = [char]10
@@ -45,6 +47,10 @@ if ($Expect.Count -eq 1 -and $Expect[0] -match '\|') { $Expect = @($Expect[0] -s
 if ($NotExpect.Count -eq 1 -and $NotExpect[0] -match '\|') { $NotExpect = @($NotExpect[0] -split '\|') }
 if ($ShotAfter.Count -eq 1 -and ([string]$ShotAfter[0]) -match ',') {
     $ShotAfter = @(([string]$ShotAfter[0]) -split ',' | ForEach-Object { [int]$_ })
+}
+# 同上：-ClickAt 'x,y x,y' 也要能拆开（-File 传参会把数组合成一个字符串）
+if ($ClickAt.Count -eq 1 -and ([string]$ClickAt[0]) -match '\s') {
+    $ClickAt = @(([string]$ClickAt[0]) -split '\s+' | Where-Object { $_ -ne '' })
 }
 
 function Say([string]$m) { Write-Output ('  ' + $m) }
@@ -114,6 +120,27 @@ public class WinTestKeys {
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
   public static void Down(byte vk, bool ext){ keybd_event(vk, 0, ext ? 1u : 0u, UIntPtr.Zero); }
   public static void Up(byte vk, bool ext){ keybd_event(vk, 0, ext ? 3u : 2u, UIntPtr.Zero); }
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
+  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
+  [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr hWnd, ref POINT p);
+  // 客户区(0,0) 在屏幕上的位置 —— OSD 坐标是"客户区坐标"，鼠标要用"屏幕坐标"
+  public static int[] ClientOrigin(IntPtr hWnd) {
+      POINT p; p.X = 0; p.Y = 0;
+      ClientToScreen(hWnd, ref p);
+      return new int[] { p.X, p.Y };
+  }
+  // 真鼠标点击：先 SetCursorPos（会自带一次 WM_MOUSEMOVE，mpv 才会更新 mouse-pos 并按命中框路由），
+  // 再补一个 MOUSEEVENTF_MOVE，最后左键按下/抬起。
+  public static void ClickAt(int x, int y) {
+      SetCursorPos(x, y);
+      System.Threading.Thread.Sleep(150);
+      mouse_event(0x0001u, 0, 0, 0, UIntPtr.Zero);
+      System.Threading.Thread.Sleep(100);
+      mouse_event(0x0002u, 0, 0, 0, UIntPtr.Zero);
+      System.Threading.Thread.Sleep(80);
+      mouse_event(0x0004u, 0, 0, 0, UIntPtr.Zero);
+  }
 }
 "@
 try { Add-Type -TypeDefinition $cs -ErrorAction Stop } catch { }
@@ -179,7 +206,7 @@ trap {
 function Log-Lines {
     if (-not (Test-Path $log)) { return 0 }
     (Get-Content $log -Encoding UTF8 -ErrorAction SilentlyContinue |
-     Select-String -Pattern '按键 →|已加标记|进入编辑态|已把|已载入|导出 CSV|绑定失败|标记模式绑定|键位覆盖表|键位检查|键位模板|设置入点|设置出点|清除出入点|从入点播放|到达出点|区间已解除|跳到 |next 计算|prev 计算' |
+     Select-String -Pattern '按键 →|已加标记|进入编辑态|已把|已载入|导出 CSV|绑定失败|标记模式绑定|键位覆盖表|键位检查|键位模板|设置入点|设置出点|清除出入点|从入点播放|到达出点|区间已解除|跳到 |next 计算|prev 计算|控制栏点击|控制栏：转到' |
      Measure-Object).Count
 }
 function Script-Lines { if (Test-Path $log) { Get-Content $log -Encoding UTF8 -ErrorAction SilentlyContinue | Select-String -Pattern '\[source_markers\]' | ForEach-Object { $_.Line } } }
@@ -194,6 +221,18 @@ function Send-One([string]$token) {
     [WinTestKeys]::Down($spec.Vk, $ex); Start-Sleep -Milliseconds 90; [WinTestKeys]::Up($spec.Vk, $ex)
     Start-Sleep -Milliseconds 40
     for ($i = $spec.Mods.Count - 1; $i -ge 0; $i--) { [WinTestKeys]::Up($spec.Mods[$i], $false) }
+}
+
+function Send-Click([string]$spec) {
+    if ($spec -notmatch '^\s*(-?\d+)\s*,\s*(-?\d+)\s*$') { throw ('点击坐标要写成 x,y：' + $spec) }
+    $cx = [int]$Matches[1]; $cy = [int]$Matches[2]
+    # -ClickAt 用的是【客户区坐标】（与插件日志"控制栏按钮框"同一坐标系）⇒ 换算成屏幕坐标
+    $org = [WinTestKeys]::ClientOrigin($h)
+    $sx = $cx + $org[0]; $sy = $cy + $org[1]
+    [WinTestKeys]::SetForegroundWindow($h) | Out-Null
+    Start-Sleep -Milliseconds 250
+    [WinTestKeys]::ClickAt($sx, $sy)
+    Say ('  → 点击 客户区(' + $cx + ',' + $cy + ')，屏幕(' + $sx + ',' + $sy + ')，客户区原点(' + $org[0] + ',' + $org[1] + ')')
 }
 
 $shots = New-Object System.Collections.ArrayList
@@ -235,6 +274,19 @@ foreach ($k in $Keys) {
     }
     Say ('第 ' + $idx + ' 键 ' + (("$k") -as [string]).PadRight(8) + ' 日志 ' + $n0 + ' → ' + $n1 + ' ' + $note)
     if ($ShotAfter -contains $idx) { Shoot ('after-' + ($k -replace '[^A-Za-z0-9]', '')) }
+}
+
+# ---------- 鼠标点击（第 8 条：控制栏按钮的命中框） ----------
+$ci = 0
+foreach ($c in $ClickAt) {
+    $ci++
+    $n0 = Log-Lines
+    Send-Click $c
+    Start-Sleep -Milliseconds $WaitMs
+    $n1 = Log-Lines
+    $note = ''
+    if ($n1 -le $n0) { $note = '（动作行没增长）' }
+    Say ('第 ' + $ci + ' 次点击 ' + (("$c") -as [string]).PadRight(10) + ' 日志 ' + $n0 + ' → ' + $n1 + ' ' + $note)
 }
 
 # ---------- 收尾截图 + 侧车 ----------
