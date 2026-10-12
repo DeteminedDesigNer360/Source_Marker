@@ -47,11 +47,14 @@ $uiState = Join-Path $env:TEMP 'source-markers-ui.json'
 $cfgDir = Join-Path $tmp 'mpvtest'
 New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
 
-function Invoke-Mpv([string]$probeFile, [string]$logFile) {
+function Invoke-Mpv([string]$probeFile, [string]$logFile, [string[]]$Extra = @()) {
     Remove-Item $uiState -ErrorAction SilentlyContinue
     Remove-Item $logFile -ErrorAction SilentlyContinue
-    & $com --no-config --config-dir="$cfgDir" --vo=null --ao=null --script="$lua" --script="$probeFile" `
-        "--log-file=$logFile" --msg-level=all=v "$Media" 2>&1 | Out-Null
+    $mpvArgs = @('--no-config', "--config-dir=$cfgDir", '--vo=null', '--ao=null',
+        "--script=$lua", "--script=$probeFile", "--log-file=$logFile", '--msg-level=all=v')
+    $mpvArgs += $Extra
+    $mpvArgs += $Media
+    & $com @mpvArgs 2>&1 | Out-Null
 }
 
 Write-Output ('包：' + (Split-Path $Package -Leaf))
@@ -119,6 +122,32 @@ foreach ($p in $pts) {
     $flag = 'x'; if ($ok) { $flag = 'v' }
     Write-Output ('  ' + $flag + ' ' + $p[0].PadRight(16) + ' 期望[' + $p[3] + '] 实际[' + $got + ']')
 }
+
+# ── 第三/四趟：悬停提示（bar_tooltip）—— 默认必须【不】出现，开了才出现 ──
+Write-Output ''
+Write-Output '=== 悬停提示（默认关 / 开了才有）==='
+$ph = Join-Path $tmp 'barhit-hover.lua'
+Set-Content -LiteralPath $ph -Encoding ASCII -Value @(
+    "mp.add_timeout(0.8, function() mp.commandv('script-binding', 'source_markers/switch-osd') end)",
+    "mp.add_timeout(1.3, function() mp.commandv('script-message', 'hover', 'bar:add') end)",
+    "mp.add_timeout(1.6, function() mp.commandv('script-message', 'prbar') end)",
+    "mp.add_timeout(1.9, function() mp.commandv('script-message', 'hover', 'none') end)",
+    "mp.add_timeout(2.2, function() mp.commandv('script-message', 'prbar') end)",
+    "mp.add_timeout(2.6, function() mp.commandv('quit') end)"
+) -ErrorAction Stop
+
+# 悬浮时"打标记"被画成文字时的特征：text_line 的尾巴 `}打标记`
+$tip = '}打标记'
+
+Invoke-Mpv $ph (Join-Path $tmp 'barhit-tip-off.log')
+$offHit = (Select-String -LiteralPath (Join-Path $tmp 'barhit-tip-off.log') -Pattern ([regex]::Escape($tip)) -ErrorAction SilentlyContinue | Measure-Object).Count
+if ($offHit -eq 0) { Write-Output 'v 默认（未开 bar_tooltip）：悬浮时不画提示 ✓' }
+else { Write-Output 'X 默认就把提示画出来了（应默认关）'; $fails++ }
+
+Invoke-Mpv $ph (Join-Path $tmp 'barhit-tip-on.log') @('--script-opts=source-markers-bar_tooltip=yes')
+$onHit = (Select-String -LiteralPath (Join-Path $tmp 'barhit-tip-on.log') -Pattern ([regex]::Escape($tip)) -ErrorAction SilentlyContinue | Measure-Object).Count
+if ($onHit -gt 0) { Write-Output ('v 打开 bar_tooltip：悬浮时出现提示（命中 ' + $onHit + ' 处）✓') }
+else { Write-Output 'X 打开 bar_tooltip 后仍没有提示'; $fails++ }
 
 if (-not $KeepTmp) { Remove-Item (Join-Path $tmp 'barhit-*.lua') -ErrorAction SilentlyContinue }
 Write-Output ''

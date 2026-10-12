@@ -77,6 +77,7 @@ local o = {
     python = 'python',         -- 老版本 mpv 的输入框兜底解释器
     helper = '',               -- 自定义输入框脚本（留空用内置）
     bar_scale = 1.0,           -- 第 8 条：Pr 风格控制栏的额外缩放（1.0 = 只随窗口自适应）
+    bar_tooltip = false,       -- 第 8 条：鼠标悬停时在按钮上方显示按钮名（默认关）
 }
 opts.read_options(o, 'source-markers')
 
@@ -1796,7 +1797,7 @@ local function show_help(state)
     local hints = {
         '鼠标党按 ' .. key_of('toggle-panel') .. ' 开 / 关 OSD，' .. key_of('switch-osd')
             .. ' 在「按钮面板」和「Pr 风格控制栏」之间换样式；两种都能点。',
-        'Pr 风格控制栏按钮（左→右）：打标记 · 标记入点 · 标记出点 · 转到入点 · 后退一帧 · 播放/暂停 · 向前一帧 · 转到出点 · 截取当前帧',
+        'Pr 风格控制栏按钮（左→右）：上一个标记 · 打标记 · 下一个标记 · 标记入点 · 标记出点 · 转到入点 · 后退一帧 · 播放/暂停 · 向前一帧 · 转到出点 · 截取当前帧',
     }
     local hint_lines = {}
     for _, s in ipairs(hints) do
@@ -1965,6 +1966,10 @@ end
 -- 第 8 条：Pr 源监视器风格控制栏（与 F2 按钮面板互斥；F3 切换样式）
 ----------------------------------------------------------------------
 -- 圆用正 16 边形近似（图标只有 20 单位见方，肉眼与真圆无异）
+-- 前后标记：上半箭头、下半盾（**上下叠** —— 与「转到入/出点」那种"括号+箭头"并排的样式区分开，
+-- 否则一眼分不清谁是谁；盾沿用「打标记」那个五边形，视觉语言统一）
+local SHIELD_SMALL = { 5, 10, 15, 10, 15, 15, 10, 19.5, 5, 15 }
+
 local function circle_pts(cx, cy, r, reverse)
     local pts, n = {}, 16
     for i = 0, n - 1 do
@@ -2020,12 +2025,24 @@ local ICONS = {
             circle_pts(10, 11.75, 3.6, true),                           -- 镜头（反向 ⇒ 挖孔）
         },
     },
+    -- 上一个 / 下一个标记：左（右）向块箭头 + 下方小盾
+    marker_prev = {
+        { 14, 3, 6, 3, 6, 1, 0, 6, 6, 11, 6, 9, 14, 9 },               -- 左向箭头
+        SHIELD_SMALL,
+    },
+    marker_next = {
+        { 6, 3, 14, 3, 14, 1, 20, 6, 14, 11, 14, 9, 6, 9 },            -- 右向箭头
+        SHIELD_SMALL,
+    },
 }
 
 -- 左→右：与 Pr 源监视器底部栏一致（Pr 里"插入/覆盖/切换代理"在 mpv 无意义，不画也不留位）
 local PRBAR_BTN = {
-    { name = 'add',      icon = 'marker',    label = '打标记' },
-    { name = 'in-set',   icon = 'brace_in',  label = '标记入点' },
+    -- 打标记两侧各放一个"跳标记"（Pr 的按钮栏里没有，是给鼠标党的补充；三件事聚在最左端）
+    { name = 'prev-marker', icon = 'marker_prev', label = '上一个标记' },
+    { name = 'add',         icon = 'marker',      label = '打标记' },
+    { name = 'next-marker', icon = 'marker_next', label = '下一个标记' },
+    { name = 'in-set',      icon = 'brace_in',    label = '标记入点' },
     { name = 'out-set',  icon = 'brace_out', label = '标记出点' },
     { name = 'goto-in',  icon = 'goto_in',   label = '转到入点', need = 'in' },
     { name = 'back1',    icon = 'back1',     label = '后退一帧' },
@@ -2132,6 +2149,25 @@ local function render_prbar()
         end
         buttons[#buttons + 1] = { name = 'bar:' .. b.name, act = b.name, label = b.label,
                                   x = bx, y = by, w = m.cell, h = m.cell, disabled = disabled }
+    end
+    -- 悬停提示（默认关：o.bar_tooltip=false）：在按钮上方画一个自适应宽度的小框。
+    -- 贴左/贴右的按钮要把框往里挪，否则会顶出屏幕。
+    if o.bar_tooltip and UI.hover then
+        for _, b in ipairs(buttons) do
+            if b.name == UI.hover then
+                local tsize = math.max(13, math.floor(m.cell * 0.5))
+                local tw = math.floor(visual_width(b.label) * tsize * 0.58) + 14
+                local th = tsize + 10
+                local tx = math.floor(b.x + b.w / 2 - tw / 2)
+                if tx < 6 then tx = 6 end
+                if tx + tw > m.w - 6 then tx = m.w - 6 - tw end
+                local ty = m.y - th - 6
+                if ty < 6 then ty = m.y + m.bar_h + 6 end       -- 栏贴着屏幕顶时改画到下方
+                lines[#lines + 1] = round_rect_line(tx, ty, tw, th, 4, '&H141414&', '12')
+                lines[#lines + 1] = text_line(tx + 7, ty + 5, tsize, '&HFFFFFF&', b.label)
+                break
+            end
+        end
     end
     set_overlay(overlay_bar, lines, m.w, m.h)
     PRBAR_BUTTONS = buttons
@@ -2608,6 +2644,9 @@ local function shot_frame()
     end)
 end
 HANDLERS['shot'] = shot_frame
+-- 控制栏最左那对"跳标记"：复用既有的 step_marker（与 Alt+n/Alt+p、Shift+M/Ctrl+Shift+M 同一套逻辑）
+HANDLERS['prev-marker'] = function() step_marker(-1) end
+HANDLERS['next-marker'] = function() step_marker(1) end
 
 for _, spec in ipairs(PRBAR_BTN) do
     local ok, err = pcall(mp.add_key_binding, nil, 'bar-' .. spec.name,
@@ -3149,6 +3188,15 @@ mp.register_script_message('hit', function(x, y)
     end
     msg.verbose(string.format('命中测试 %d,%d → %s ｜ %s', mx, my, hit, table.concat(marks, ' ')))
 end)
+-- 第 8 条：悬停"取证钩子" —— 直接指定悬停哪个按钮（自动化测试用；
+-- 本机不能注入鼠标，所以"悬停提示"只能靠它验）。传空/不存在的名字 = 清空悬停。
+mp.register_script_message('hover', function(name)
+    local want = tostring(name or '')
+    UI.hover = (want ~= '' and want ~= 'none') and want or nil
+    msg.verbose(string.format('悬停设为 %s', UI.hover and tostring(UI.hover) or '（无）'))
+    render_panel()
+    render_prbar()
+end)
 mp.register_script_message('state', function()
     print(json_encode({
         sidecar_enabled = o.sidecar,
@@ -3212,7 +3260,7 @@ end)
 
 write_key_template()
 check_key_conflicts()
-msg.info(string.format('source-markers 1.2.0-alpha r42 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
+msg.info(string.format('source-markers 1.2.0-alpha r43 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
     #ACTIONS, key_of('help'), key_of('toggle-panel'),
     tostring(o.sidecar), tostring(o.hide_sidecar), tostring(o.time_format),
     input and 'mp.input（播放器内输入框）' or 'python 兜底对话框'))
