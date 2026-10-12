@@ -1796,7 +1796,7 @@ local function show_help(state)
     local hints = {
         '鼠标党按 ' .. key_of('toggle-panel') .. ' 开 / 关 OSD，' .. key_of('switch-osd')
             .. ' 在「按钮面板」和「Pr 风格控制栏」之间换样式；两种都能点。',
-        'Pr 风格控制栏按钮（左→右）：打标记 · 标记入点 · 标记出点 · 转到入点 · 后退一帧 · 播放/暂停 · 向前一帧 · 转到出点',
+        'Pr 风格控制栏按钮（左→右）：打标记 · 标记入点 · 标记出点 · 转到入点 · 后退一帧 · 播放/暂停 · 向前一帧 · 转到出点 · 截取当前帧',
     }
     local hint_lines = {}
     for _, s in ipairs(hints) do
@@ -1964,6 +1964,18 @@ end
 ----------------------------------------------------------------------
 -- 第 8 条：Pr 源监视器风格控制栏（与 F2 按钮面板互斥；F3 切换样式）
 ----------------------------------------------------------------------
+-- 圆用正 16 边形近似（图标只有 20 单位见方，肉眼与真圆无异）
+local function circle_pts(cx, cy, r, reverse)
+    local pts, n = {}, 16
+    for i = 0, n - 1 do
+        local k = reverse and (n - i) or i
+        local a = 2 * math.pi * k / n
+        pts[#pts + 1] = cx + r * math.cos(a)
+        pts[#pts + 1] = cy + r * math.sin(a)
+    end
+    return pts
+end
+
 -- 图标全部是【矢量多边形】（ASS \p1 绘图指令），不依赖字体：换字体/换系统都不会变形。
 -- 坐标一律在 20×20 的方格里，渲染时按 icon/20 缩放。
 local ICONS = {
@@ -1998,6 +2010,16 @@ local ICONS = {
     -- 播放 / 暂停
     play = { { 3, 1, 18, 10, 3, 19 } },
     pause = { { 4, 2, 8, 2, 8, 18, 4, 18 }, { 12, 2, 16, 2, 16, 18, 12, 18 } },
+    -- 截取当前帧：相机（机身 + 顶部取景凸起 + 镜头"挖洞"）。
+    -- 这三条必须是**同一个 \p1 里的多条子路径**：机身在先、镜头圈反向走后（nonzero 填充规则）
+    -- 才能把机身挖出一个圆孔；分成两次绘制的话，孔里露出的是同色的机身 ⇒ 镜头根本看不见（踩过）。
+    camera = {
+        {
+            { 1, 5.5, 19, 5.5, 19, 18, 1, 18 },                        -- 机身
+            { 6.5, 2.5, 13.5, 2.5, 13.5, 5.5, 6.5, 5.5 },              -- 顶部取景凸起
+            circle_pts(10, 11.75, 3.6, true),                           -- 镜头（反向 ⇒ 挖孔）
+        },
+    },
 }
 
 -- 左→右：与 Pr 源监视器底部栏一致（Pr 里"插入/覆盖/切换代理"在 mpv 无意义，不画也不留位）
@@ -2010,17 +2032,28 @@ local PRBAR_BTN = {
     { name = 'play',     icon = 'play',      label = '播放 / 暂停' },
     { name = 'fwd1',     icon = 'fwd1',      label = '向前一帧' },
     { name = 'goto-out', icon = 'goto_out',  label = '转到出点', need = 'out' },
+    { name = 'shot',     icon = 'camera',    label = '截取当前帧' },
 }
 
--- ASS 填充多边形：pts = {x1,y1, x2,y2, ...}（20×20 单位；自动闭合）
+-- ASS 填充多边形：pts 可以是 {x1,y1, x2,y2, ...}（单条闭合多边形），
+-- 也可以是 {{...},{...}}（多条子路径：内圈反向走，靠 nonzero 填充规则挖空 —— 镜头环这类"带孔"图标用）
 local function poly_line(x, y, s, color, alpha, pts)
-    local t = {}
-    for i = 1, #pts, 2 do
-        t[#t + 1] = string.format('%.1f %.1f', pts[i] * s, (pts[i + 1] or 0) * s)
+    local function path_of(list)
+        local t = {}
+        for i = 1, #list, 2 do
+            t[#t + 1] = string.format('%.1f %.1f', list[i] * s, (list[i + 1] or 0) * s)
+        end
+        t[#t + 1] = string.format('%.1f %.1f', list[1] * s, list[2] * s)     -- 闭合路径
+        return 'm ' .. table.concat(t, ' l ')
     end
-    t[#t + 1] = string.format('%.1f %.1f', pts[1] * s, pts[2] * s)     -- 闭合路径
-    return string.format('{\\an7\\pos(%d,%d)\\p1\\bord0\\shad0\\1c%s\\alpha&H%s&}m %s{\\p0}',
-        x, y, color or '&HA8A8A8&', alpha or '00', table.concat(t, ' l '))
+    local parts = {}
+    if type(pts[1]) == 'table' then
+        for _, sub in ipairs(pts) do parts[#parts + 1] = path_of(sub) end
+    else
+        parts[#parts + 1] = path_of(pts)
+    end
+    return string.format('{\\an7\\pos(%d,%d)\\p1\\bord0\\shad0\\1c%s\\alpha&H%s&}%s{\\p0}',
+        x, y, color or '&HA8A8A8&', alpha or '00', table.concat(parts, ' '))
 end
 
 -- ASS 圆角矩形：四角用三次贝塞尔（k=0.5523 是标准圆近似系数）
@@ -2534,6 +2567,47 @@ end
 HANDLERS['back1'] = function() mp.commandv('frame-back-step') end
 HANDLERS['fwd1']  = function() mp.commandv('frame-step') end
 HANDLERS['play']  = function() mp.commandv('cycle', 'pause') end
+
+-- 第 8 条 步骤 4：截取当前帧（Pr 的相机按钮）—— 存到素材同目录的 `截图\` 下，**不带 OSD**
+local function shot_timecode(t)
+    local ms = math.floor((t - math.floor(t)) * 1000 + 0.5)
+    local sec = math.floor(t)
+    return string.format('%02d.%02d.%02d.%03d', math.floor(sec / 3600),
+        math.floor(sec % 3600 / 60), sec % 60, ms)
+end
+
+local function shot_frame()
+    local t = head_time()
+    if not t then notify('还没有打开文件'); return end
+    local path = mp.get_property('path')
+    if not is_local_file(path) then notify('截取当前帧：只支持本地文件'); return end
+    local dir = dir_of(path)
+    if not dir then notify('截取当前帧：拿不到素材目录'); return end
+    local outdir = dir .. '\\截图'
+    ensure_dir(outdir)
+    local stem = string.format('%s-%s', base_of(path), shot_timecode(t))
+    local target = outdir .. '\\' .. stem .. '.png'
+    local n = 1
+    while file_exists(target) and n < 999 do
+        n = n + 1
+        target = string.format('%s\\%s-%d.png', outdir, stem, n)
+    end
+    -- 'video' = 只要画面：**不带字幕 / 不带 OSD**
+    -- （不给 flags 时 mpv 默认按 subtitles 处理，会把 OSD 一起烤进图里）
+    mp.commandv('screenshot-to-file', target, 'video')
+    log('截取当前帧：t=%.3f → %s', t, target)
+    -- 截图是异步的：等文件真落盘再报路径（否则又成了"发出去就算成功"）
+    mp.add_timeout(0.7, function()
+        if file_exists(target) then
+            notify('已截取当前帧：' .. target)
+            log('截取当前帧完成：%s', target)
+        else
+            notify('截取当前帧失败（没找到产物）：' .. target)
+            msg.warn('截取当前帧失败：' .. target)
+        end
+    end)
+end
+HANDLERS['shot'] = shot_frame
 
 for _, spec in ipairs(PRBAR_BTN) do
     local ok, err = pcall(mp.add_key_binding, nil, 'bar-' .. spec.name,
@@ -3138,7 +3212,7 @@ end)
 
 write_key_template()
 check_key_conflicts()
-msg.info(string.format('source-markers 1.2.0-alpha r41 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
+msg.info(string.format('source-markers 1.2.0-alpha r42 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
     #ACTIONS, key_of('help'), key_of('toggle-panel'),
     tostring(o.sidecar), tostring(o.hide_sidecar), tostring(o.time_format),
     input and 'mp.input（播放器内输入框）' or 'python 兜底对话框'))
