@@ -81,7 +81,9 @@ local o = {
     tl = true,                 -- 第 9 条：Pr 风格下是否显示那条可缩放时间轴（默认开）
     tl_scale = 2.0,            -- 第 9 条：时间轴自己的缩放因子（Pr 里时间轴高度 ≈ 控制栏的 2~3 倍）
     tl_min_frames = 15,        -- 第 9 条：时间轴最小跨度（帧）——滚轮最多放大到这么多帧
-    tl_zoom_steps = '1.10,1.03,1.35',  -- 第 9 条：滚轮缩放步长（普通,Ctrl细,Shift粗）——重启生效
+    tl_zoom_steps = '1.003,1.001,1.01',  -- 第 9 条：滚轮缩放步长（普通,Ctrl细,Shift粗）——用户实测手感值
+    tl_zoom_anchor = 'pr',     -- 第 9 条：缩放锚点 pr = 逐步把播放头拉向区间中心（Pr 手感）| head = 死钉在播放头（替补）
+    tl_zoom_pull = 4,          -- 第 9 条：pr 模式的拉力：每档把"离中心的相对偏移"乘以 (1/倍率)^拉力
     tl_labels = true,          -- 第 9 条：刻度上是否显示时间戳（Pr 没有；默认开）
     tl_ov_map = 'linear',      -- 第 9 条：概览条映射 linear（所见即真实比例）| sqrt（Pr 那种压缩，默认不用）
 }
@@ -2606,6 +2608,16 @@ local function tl_zoom(factor, why)
     if anchor < t0c then anchor = t0c end              -- 播放头在范围外 ⇒ 以最近的边为轴
     if anchor > t1c then anchor = t1c end
     local p = (anchor - t0c) / span
+    -- 锚点模式（用户 2026-10-13）：Pr 是"向着播放头缩放"，而且缩到最小之前播放头就已经贴到区间中心 ——
+    -- 做法是每档把"离中心的相对偏移"收一点（收多少 = tl_zoom_pull）。head = 老做法（死钉在播放头），留作替补。
+    if (o.tl_zoom_anchor or 'pr') ~= 'head' then
+        local pull = tonumber(o.tl_zoom_pull) or 4
+        if pull > 0 then
+            p = 0.5 + (p - 0.5) * (1 / factor) ^ pull
+            msg.verbose(string.format('时间轴·缩放锚点 p → %.3f（%s，拉力 %s）', p,
+                tostring(o.tl_zoom_anchor), tostring(pull)))
+        end
+    end
     local newspan = span / factor
     local minspan = tl_min_span()
     if newspan < minspan then newspan = minspan end
@@ -2884,18 +2896,13 @@ mp.commandv('define-section', TL_KEYSEC,
     'PGUP script-binding ' .. BIND_PREFIX .. 'tl-drop\n' ..
     'PGDWN script-binding ' .. BIND_PREFIX .. 'tl-drop', 'force')
 mp.add_key_binding(nil, 'tl-click', tl_click)
--- 双击：mpv 默认"双击 = 切全屏"，会跟"双击回整片"抢。绑到全局键上自己判断：
--- 落在时间轴的刻度带上 = 回整片；其它地方（或时间轴没显示时）= 转发 mpv 的默认行为（两边都不丢）。
-mp.add_key_binding('MBTN_LEFT_DBL', 'tl-dbl', function()
-    local g = TL.geo
-    local p = mp.get_property_native('mouse-pos')
-    local on_tl = false
-    if (UI.bar and UI.style == 'prbar' and o.tl) and g and p and p.x then
-        on_tl = (p.x >= g.x0 - 2 and p.x <= g.x1 + 4 and p.y >= g.y_lab - 2 and p.y <= g.rl_y + 1)
-    end
-    log('时间轴·双击 → %s', on_tl and '回整片' or '转发全屏（mpv 默认）')
+-- 双击：mpv 默认"双击 = 切全屏"。上次试的"用脚本绑定盖住它"你复验仍然切全屏（脚本 section 盖不住
+-- mbtn_left_dbl 的默认绑定）⇒ 改成直接改 default section 那条：双击不再切全屏，**全屏改按 F11**（mpv 自带的 `f` 也还在）。
+-- "双击回整片"由 tl-click 里的计时判定负责（两次单击 ≤0.40s），不依赖 mbtn_left_dbl。
+mp.commandv('keybind', 'MBTN_LEFT_DBL', 'ignore')
+mp.add_key_binding('F11', 'tl-fullscreen', function() mp.commandv('cycle', 'fullscreen') end)
+mp.add_key_binding('MBTN_LEFT_DBL', 'tl-dbl', function()      -- 兜底：万一哪台机器还能收到，只负责结束抓取
     if TL.grab then TL.drop('双击') end
-    if on_tl then tl_reset('双击刻度带') else mp.commandv('cycle', 'fullscreen') end
 end)
 -- 自动化取证钩子：tl-hit 用给定坐标走一遍点击（本机不能注入鼠标）；tl-goto 直接按时间码跳
 mp.register_script_message('tl-hit', function(x, y)
@@ -2909,6 +2916,27 @@ mp.register_script_message('tl-goto', function(str)
     local fr = math.floor(v * g.fps + 1e-6)
     mp.set_property_number('time-pos', fr / g.fps)
     msg.verbose(string.format('时间轴·输入 %s → %.3f（帧 %d）', str, fr / g.fps, fr))
+end)
+
+-- 调参钩子（运行时立即生效，不用重启；想长期保留就写进 source-markers.conf）：
+--   tl-steps 1.003,1.001,1.01 ｜ tl-anchor pr|head [拉力] ｜ tl-ov linear|sqrt
+mp.register_script_message('tl-steps', function(str)
+    local a, b, c = tostring(str or ''):match('([%d%.]+)%s*,%s*([%d%.]+)%s*,%s*([%d%.]+)')
+    if a and b and c then
+        TL_STEP.plain, TL_STEP.ctrl, TL_STEP.shift = tonumber(a), tonumber(b), tonumber(c)
+        log('时间轴·滚轮步长 → %s / %s / %s', tostring(TL_STEP.plain), tostring(TL_STEP.ctrl),
+            tostring(TL_STEP.shift))
+    end
+end)
+mp.register_script_message('tl-anchor', function(mode, pull)
+    o.tl_zoom_anchor = (tostring(mode) == 'head') and 'head' or 'pr'
+    if tonumber(pull) then o.tl_zoom_pull = tonumber(pull) end
+    log('时间轴·缩放锚点 → %s（拉力 %s）', tostring(o.tl_zoom_anchor), tostring(o.tl_zoom_pull))
+end)
+mp.register_script_message('tl-ov', function(mode)
+    o.tl_ov_map = (tostring(mode) == 'sqrt') and 'sqrt' or 'linear'
+    log('时间轴·概览映射 → %s', tostring(o.tl_ov_map))
+    render_timeline()
 end)
 
 -- 每次重绘摆好可点区域；时间轴隐藏时清空（与 bar_sections_off 同一套做法）
@@ -2927,6 +2955,7 @@ end
 TL.zoom, TL.pan, TL.reset = tl_zoom, tl_pan, tl_reset
 TL.set_range, TL.min_span, TL.clamp_range = tl_set_range, tl_min_span, tl_clamp_range
 TL.ACTIONS = TL_ACTIONS
+TL.STEP = TL_STEP
 end
 tl_init()
 
@@ -4002,6 +4031,9 @@ mp.register_script_message('state', function()
         input = input and 'mp.input' or 'fallback',
         tl_t0 = TL.t0, tl_t1 = TL.t1, tl_file = TL.cur_file,
         tl_min_frames = tonumber(o.tl_min_frames) or 15,
+        tl_zoom_anchor = o.tl_zoom_anchor, tl_zoom_pull = o.tl_zoom_pull,
+        tl_zoom_steps = TL.STEP and string.format('%s,%s,%s', tostring(TL.STEP.plain),
+            tostring(TL.STEP.ctrl), tostring(TL.STEP.shift)) or nil,
     }))
 end)
 
