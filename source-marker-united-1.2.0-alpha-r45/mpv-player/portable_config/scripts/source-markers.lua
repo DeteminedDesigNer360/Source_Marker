@@ -2321,11 +2321,19 @@ local function render_timeline()
     end
 
     -- ⑥a 播放头竖条：**先画**，下面的刻度会盖在它上面（Pr 的行为：刻度在播放头上层）
+    --     放大到"一帧 ≥6px"以后，播放头**吸到帧头**（与 ⑥ 的"当前显示帧"扁条同一个条件）——
+    --     到这个倍率，播放头只该落在帧头/刻度上，不该落在帧中间（用户反馈）。
     local t = head_time()
     local PL = '&HFFA64D&'
-    local cx_pl
+    local frame_px = (1 / fps) / span * rw          -- 一格帧有多宽
+    local fi, pl_t, cx_pl                           -- fi = 当前显示帧号（只在吸帧时算）；pl_t = 实际用来画播放头的时间
+    if t and frame_px >= 6 then
+        fi = math.floor(t * fps + 1e-6)
+        pl_t = fi / fps
+    end
     if t and t >= t0 and t <= t1 then
-        cx_pl = math.floor(t2x(t)) + 0.5      -- 1px 竖线画在 [cx,cx+1)，中心是 cx+0.5
+        local xpl = math.max(x0, math.min(x1, t2x(pl_t or t)))
+        cx_pl = math.floor(xpl) + 0.5               -- 1px 竖线画在 [cx,cx+1)，中心是 cx+0.5
         lines[#lines + 1] = rect_line(math.floor(cx_pl), row_lab, 1, rl_y - row_lab + 1, PL, '30')
     end
 
@@ -2452,12 +2460,10 @@ local function render_timeline()
     --    在范围外 = 对应边缘画方向小箭头（用户定的）。
     if t then
         if t >= t0 and t <= t1 then
-            local fi = math.floor(t * fps + 1e-6)          -- 监视器显示的正是这一帧
-            local wf = (1 / fps) / span * rw
-            if wf >= 6 then
+            if fi then                                     -- 一帧 ≥6px：画出"当前显示帧"那一格
                 local bh = math.max(2, math.floor(tick_h2 / 2))
                 lines[#lines + 1] = rect_line(math.floor(t2x(fi / fps)), rl_y - bh,
-                    math.max(2, math.floor(wf)), bh + 1, PL, '00')
+                    math.max(2, math.floor(frame_px)), bh + 1, PL, '00')
             end
             lines[#lines + 1] = poly_line(cx_pl - mw / 2, rl_y - ph, mw / 20, PL, '00', shield_pts(ph, mw))
         elseif t < t0 then
@@ -2475,7 +2481,8 @@ local function render_timeline()
         t0, t1, x0, x1, #lines,
         step, parts or 0, o.tl_labels and 'on' or 'off', first_lab ~= '' and first_lab or '（无）',
         xi_x and string.format('%.0f', xi_x) or '无', xo_x and string.format('%.0f', xo_x) or '无',
-        t and string.format('%.3f', t) or '无'))
+        t and string.format('%.3f 吸帧=%s 帧宽=%.1fpx 头x=%.0f', t, fi and tostring(fi) or '关',
+            frame_px, cx_pl or -1) or '无'))
 end
 
 -- 第 9 条：内置 OSC 跟随样式 —— 老样式（按钮面板）要 mpv 自带的底部播放条；
