@@ -82,7 +82,7 @@ local o = {
     tl_scale = 2.0,            -- 第 9 条：时间轴自己的缩放因子（Pr 里时间轴高度 ≈ 控制栏的 2~3 倍）
     tl_min_frames = 15,        -- 第 9 条：时间轴最小跨度（帧）——滚轮最多放大到这么多帧
     tl_zoom_steps = '1.003,1.001,1.01',  -- 第 9 条：滚轮缩放步长（普通,Ctrl细,Shift粗）——用户实测手感值
-    tl_zoom_anchor = 'pr',     -- 第 9 条：缩放锚点 pr = 逐步把播放头拉向区间中心（Pr 手感）| head = 死钉在播放头（替补）
+    tl_zoom_anchor = 'head',   -- 第 9 条：缩放锚点 head = 死钉在播放头（默认，你验过的那版）| center = 钉在区间中心（与播放头无关）| pr = 每档把播放头拉向中心（实验，手感诡异 ⇒ 改成 opt-in）
     tl_zoom_pull = 4,          -- 第 9 条：pr 模式的拉力：每档把"离中心的相对偏移"乘以 (1/倍率)^拉力
     tl_labels = true,          -- 第 9 条：刻度上是否显示时间戳（Pr 没有；默认开）
     tl_ov_map = 'linear',      -- 第 9 条：概览条映射 linear（所见即真实比例）| sqrt（Pr 那种压缩，默认不用）
@@ -2608,14 +2608,19 @@ local function tl_zoom(factor, why)
     if anchor < t0c then anchor = t0c end              -- 播放头在范围外 ⇒ 以最近的边为轴
     if anchor > t1c then anchor = t1c end
     local p = (anchor - t0c) / span
-    -- 锚点模式（用户 2026-10-13）：Pr 是"向着播放头缩放"，而且缩到最小之前播放头就已经贴到区间中心 ——
-    -- 做法是每档把"离中心的相对偏移"收一点（收多少 = tl_zoom_pull）。head = 老做法（死钉在播放头），留作替补。
-    if (o.tl_zoom_anchor or 'pr') ~= 'head' then
+    -- 缩放锚点（用户 2026-10-13 复验后的结论）：
+    --   head（默认）= 死钉在播放头上 —— 就是你验过的那一版，回档到这个；
+    --   center      = 钉在区间中心（"与播放头无关"的另一种理解）；
+    --   pr          = 每档把播放头拉向区间中心（我照 Pr 猜的，你说手感诡异 ⇒ 留成 opt-in，不再默认开）。
+    local anchor_mode = o.tl_zoom_anchor or 'head'
+    if anchor_mode == 'center' then
+        anchor = (t0c + t1c) / 2
+        p = 0.5
+    elseif anchor_mode == 'pr' then
         local pull = tonumber(o.tl_zoom_pull) or 4
         if pull > 0 then
             p = 0.5 + (p - 0.5) * (1 / factor) ^ pull
-            msg.verbose(string.format('时间轴·缩放锚点 p → %.3f（%s，拉力 %s）', p,
-                tostring(o.tl_zoom_anchor), tostring(pull)))
+            msg.verbose(string.format('时间轴·缩放锚点 p → %.3f（pr，拉力 %s）', p, tostring(pull)))
         end
     end
     local newspan = span / factor
@@ -2929,7 +2934,8 @@ mp.register_script_message('tl-steps', function(str)
     end
 end)
 mp.register_script_message('tl-anchor', function(mode, pull)
-    o.tl_zoom_anchor = (tostring(mode) == 'head') and 'head' or 'pr'
+    local m = tostring(mode)
+    o.tl_zoom_anchor = (m == 'center' or m == 'pr') and m or 'head'
     if tonumber(pull) then o.tl_zoom_pull = tonumber(pull) end
     log('时间轴·缩放锚点 → %s（拉力 %s）', tostring(o.tl_zoom_anchor), tostring(o.tl_zoom_pull))
 end)
