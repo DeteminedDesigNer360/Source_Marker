@@ -78,6 +78,7 @@ local o = {
     helper = '',               -- 自定义输入框脚本（留空用内置）
     bar_scale = 1.0,           -- 第 8 条：Pr 风格控制栏的额外缩放（1.0 = 只随窗口自适应）
     bar_tooltip = false,       -- 第 8 条：鼠标悬停时在按钮上方显示按钮名（默认关）
+    tl = true,                 -- 第 9 条：Pr 风格下是否显示那条可缩放时间轴（默认开）
 }
 opts.read_options(o, 'source-markers')
 
@@ -1671,6 +1672,7 @@ end
 local overlay_help = new_overlay()
 local overlay_panel = new_overlay()
 local overlay_bar = new_overlay()          -- 第 8 条：Pr 风格控制栏
+local overlay_tl = new_overlay()           -- 第 9 条：可缩放时间轴
 
 local function osd_size()
     local w, h = 1280, 720
@@ -1796,7 +1798,7 @@ local function show_help(state)
     -- 顶部两条静态说明也必须折行 —— 否则会顶出框宽被裁掉（用户上机实测反馈：这两行超出边界）
     local hints = {
         '鼠标党按 ' .. key_of('toggle-panel') .. ' 开 / 关 OSD，' .. key_of('switch-osd')
-            .. ' 换样式（Pr 风格 = 控制栏；老样式 = 按钮面板 + mpv 自带播放条）；两种都能点。',
+            .. ' 换样式（Pr 风格 = 控制栏 + 时间轴；老样式 = 按钮面板 + mpv 自带播放条）；两种都能点。',
         'Pr 风格控制栏按钮（左→右）：上一个标记 · 打标记 · 下一个标记 · 标记入点 · 标记出点 · 转到入点 · 后退一帧 · 播放/暂停 · 向前一帧 · 转到出点 · 截取当前帧',
     }
     local hint_lines = {}
@@ -2199,6 +2201,198 @@ local function render_prbar()
     end
 end
 
+----------------------------------------------------------------------
+-- 第 9 条：可缩放时间轴（Pr 源监视器风格）—— r45 静态版
+----------------------------------------------------------------------
+-- 状态：nil = 整片；r46 的缩放/平移只改这两个值（渲染永远从它们出发）
+local TL = { t0 = nil, t1 = nil }
+
+local function tl_span()
+    local dur = mp.get_property_number('duration')
+    if not dur or dur <= 0 then return nil end
+    local t0 = TL.t0 or 0
+    local t1 = TL.t1 or dur
+    if t0 < 0 then t0 = 0 end
+    if t1 > dur then t1 = dur end
+    if t1 - t0 < 1e-6 then t0, t1 = 0, dur end
+    return t0, t1, dur
+end
+
+local function tl_metrics()
+    local w, h = osd_size()
+    local bm = prbar_metrics()                    -- 与控制栏同一套缩放；位置贴着控制栏正上方
+    local width = math.min(math.floor(w * 0.62), w - 80)
+    if width < 280 then width = math.max(200, w - 40) end
+    local height = math.floor(66 * bm.scale + 0.5)
+    local x = math.max(8, math.floor((w - width) / 2))
+    local y = math.max(8, bm.y - height - math.floor(6 * bm.scale + 0.5))
+    return { w = w, h = h, scale = bm.scale, x = x, y = y, width = width, height = height,
+             pad = math.floor(9 * bm.scale + 0.5) }
+end
+
+local function render_timeline()
+    local m = tl_metrics()
+    local t0, t1, dur = tl_span()
+    if not (UI.bar and UI.style == 'prbar' and o.tl) or not t0 then
+        set_overlay(overlay_tl, nil, m.w, m.h)
+        return
+    end
+    local s = m.scale
+    local fps = get_fps() or 25
+    local pad = m.pad
+    local x0 = m.x + pad
+    local x1 = m.x + m.width - pad
+    local rw = x1 - x0
+    local span = t1 - t0
+    local lines = { round_rect_line(m.x, m.y, m.width, m.height, math.floor(8 * s + 0.5), '&H1E1E1E&', '18') }
+
+    -- 行高从上往下推，避免写死偏移
+    local tc_sz = math.max(11, math.floor(12 * s + 0.5))
+    local ov_h  = math.max(6, math.floor(8 * s + 0.5))
+    local rl_h  = math.max(14, math.floor(22 * s + 0.5))
+    local cy = m.y + pad
+    local row_tc = cy
+    cy = cy + tc_sz + math.floor(2 * s + 0.5)
+    local row_ov = cy
+    cy = cy + ov_h + math.floor(3 * s + 0.5)
+    local row_rl = cy
+    local rl_bottom = row_rl + rl_h
+
+    local function t2x(t)
+        local x = x0 + (t - t0) / span * rw
+        if x < x0 then x = x0 end
+        if x > x1 then x = x1 end
+        return x
+    end
+    local function ov2x(t) return x0 + t / dur * rw end
+
+    -- ① 两端时间码 = 可见范围的起点 / 终点
+    local ltxt = to_timecode(t0, fps)
+    local rtxt = to_timecode(t1, fps)
+    lines[#lines + 1] = text_line(x0, row_tc, tc_sz, '&HB8C4D0&', ltxt)
+    lines[#lines + 1] = text_line(x1 - math.floor(visual_width(rtxt) * tc_sz * 0.55), row_tc, tc_sz, '&HB8C4D0&', rtxt)
+
+    -- ② 概览 ⚪==⚪：整片一条细线，亮的一段 = 当前可见范围，两端各一个圆
+    local ov_mid = row_ov + math.floor(ov_h / 2)
+    lines[#lines + 1] = rect_line(x0, ov_mid - 1, rw, 2, '&H4A4A4A&', '10')
+    local wx0, wx1 = ov2x(t0), ov2x(t1)
+    lines[#lines + 1] = rect_line(math.floor(wx0), ov_mid - 1, math.max(1, math.floor(wx1 - wx0)), 2, '&HD0D0D0&', '0')
+    local cr = math.max(3, math.floor(3.6 * s + 0.5))
+    for _, cx in ipairs({ math.floor(wx0), math.floor(wx1) }) do
+        lines[#lines + 1] = poly_line(cx - cr - 1, ov_mid - cr - 1, (cr + 1) / 10, '&H101010&', '40',
+            circle_pts(10, 10, 10))
+        lines[#lines + 1] = poly_line(cx - cr, ov_mid - cr, cr / 10, '&HE8E8E8&', '00', circle_pts(10, 10, 10))
+    end
+
+    -- ③ 刻度尺：按可见跨度自动选步长（至少每 6px 一格；标签约每 72px 一个）
+    local rl_y = rl_bottom - 1
+    lines[#lines + 1] = rect_line(x0, rl_y, rw, 1, '&H5A5A5A&', '0')
+    local steps = { 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600 }
+    local step = steps[#steps]
+    for _, v in ipairs(steps) do
+        if span / v <= rw / 6 then step = v; break end
+    end
+    local px_per_tick = step / span * rw
+    -- 刻度标签用**短格式**（MM:SS / H:MM:SS；步长小于 1 秒时带一位小数）。
+    -- 用完整时间码时标签本身就有 ~90px 宽，会糊成一片（第一版就是这样，出图才发现）。
+    local function tl_label(tt, st)
+        local sec = math.floor(tt + 1e-6)
+        local hh = math.floor(sec / 3600)
+        local mm = math.floor(sec % 3600 / 60)
+        local ss = sec % 60
+        if st < 1 then
+            return string.format('%02d:%02d.%d', mm, ss, math.floor((tt - sec) * 10 + 0.5) % 10)
+        end
+        if hh > 0 then return string.format('%d:%02d:%02d', hh, mm, ss) end
+        return string.format('%02d:%02d', mm, ss)
+    end
+    local lab_sz = math.max(10, tc_sz - 1)
+    local lab_sample = tl_label(math.ceil(t0 / step) * step, step)
+    local lab_px = math.floor(visual_width(lab_sample) * lab_sz * 0.55) + 14
+    local label_every = math.max(1, math.ceil(lab_px / math.max(1, px_per_tick)))
+    local tick_h  = math.max(3, math.floor(5 * s + 0.5))
+    local tick_h2 = math.max(6, math.floor(9 * s + 0.5))
+    local i, t = 0, math.ceil(t0 / step) * step
+    while t <= t1 + 1e-9 do
+        local x = math.floor(t2x(t))
+        local big = (i % label_every == 0)
+        local hh = big and tick_h2 or tick_h
+        lines[#lines + 1] = rect_line(x, rl_y - hh, 1, hh, '&H6E6E6E&', '0')
+        if big then
+            lines[#lines + 1] = text_line(x + 3, rl_y - tick_h2 - lab_sz - 1, lab_sz, '&H7A8A9A&', tl_label(t, step))
+        end
+        t = t + step
+        i = i + 1
+    end
+
+    -- ④ 标记 ▼（彩色；同一个像素位置只画一个 —— 密集时否则糊成实心带）
+    local mh = math.max(5, math.floor(7 * s + 0.5))
+    local mw = math.max(5, math.floor(6 * s + 0.5))
+    local last_x = -999
+    for _, mk in ipairs(S.markers) do
+        if mk.t >= t0 and mk.t <= t1 then
+            local x = t2x(mk.t)
+            if x - last_x >= 2 then
+                last_x = x
+                local c = ass_color(mk.color or 0)
+                lines[#lines + 1] = poly_line(math.floor(x - mw / 2), rl_y - tick_h2 - mh, mw / 20, c, '00',
+                    { 0, 0, 20, 0, 10, 20 })
+                lines[#lines + 1] = rect_line(math.floor(x), rl_y - tick_h2, 1, tick_h2, c, '70')
+            end
+        end
+    end
+
+    -- ⑤ 出入点：区间淡色带 + 两个方括号（区间武装中用另一种色）
+    local xi_x, xo_x
+    if IN_FRAME or OUT_FRAME then
+        local xi = IN_FRAME and t2x(frame_seconds(IN_FRAME)) or nil
+        local xo = OUT_FRAME and t2x(frame_seconds(OUT_FRAME)) or nil
+        xi_x, xo_x = xi, xo
+        local band = RANGE_ARMED and '&H2A6E2A&' or '&H6E4A2A&'
+        if xi and xo and xo > xi then
+            lines[#lines + 1] = rect_line(math.floor(xi), row_rl, math.max(1, math.floor(xo - xi)), rl_h, band, '70')
+        end
+        local bw = math.max(2, math.floor(2 * s + 0.5))
+        local arm = math.max(4, math.floor(5 * s + 0.5))
+        for _, spec in ipairs({ { xi, 1 }, { xo, -1 } }) do
+            local x = spec[1]
+            if x then
+                local ax = math.floor(x - (spec[2] < 0 and arm or 0))
+                lines[#lines + 1] = rect_line(math.floor(x), row_rl - 3, bw, rl_h + 3, '&HFFFFFF&', '10')
+                lines[#lines + 1] = rect_line(ax, row_rl - 3, arm, bw, '&HFFFFFF&', '10')
+                lines[#lines + 1] = rect_line(ax, rl_y - bw, arm, bw, '&HFFFFFF&', '10')
+            end
+        end
+    end
+
+    -- ⑥ 播放头：在范围内 = 竖线 + 顶部 ▼；在范围外 = 对应边缘画方向小箭头（用户定的）
+    local t = head_time()
+    if t then
+        if t >= t0 and t <= t1 then
+            local x = math.floor(t2x(t))
+            lines[#lines + 1] = rect_line(x, row_rl, math.max(1, math.floor(1.5 * s + 0.5)), rl_h + tick_h2,
+                '&HFFA64D&', '10')
+            lines[#lines + 1] = poly_line(x - math.floor(mw / 2), rl_y - tick_h2 - mh, mw / 20, '&HFFA64D&', '00',
+                { 0, 0, 20, 0, 10, 20 })
+        elseif t < t0 then
+            local hgt = rl_h - 4
+            lines[#lines + 1] = poly_line(x0 + 2, row_rl + 2, hgt / 20, '&HFFA64D&', '20',
+                { 20, 0, 0, 10, 20, 20 })
+        else
+            local hgt = rl_h - 4
+            lines[#lines + 1] = poly_line(x1 - hgt - 2, row_rl + 2, hgt / 20, '&HFFA64D&', '20',
+                { 0, 0, 20, 10, 0, 20 })
+        end
+    end
+
+    set_overlay(overlay_tl, lines, m.w, m.h)
+    -- 中间量打进日志（位置类问题只能靠它精确定位，别靠肉眼数像素）
+    msg.verbose(string.format('时间轴：范围 %.3f~%.3f ｜ 画布 x %d..%d ｜ 行数 %d ｜ 入=%s 出=%s ｜ 播放头=%s',
+        t0, t1, x0, x1, #lines,
+        xi_x and string.format('%.0f', xi_x) or '无', xo_x and string.format('%.0f', xo_x) or '无',
+        t and string.format('%.3f', t) or '无'))
+end
+
 -- 第 9 条：内置 OSC 跟随样式 —— 老样式（按钮面板）要 mpv 自带的底部播放条；
 -- Pr 风格（控制栏 + 时间轴）用我们自己的，就把内置 OSC 关掉。
 -- 实测：`set osc no/yes` 能在运行时卸载/加载 @osc.lua（日志有 Unloading/Loading script @osc.lua），
@@ -2231,6 +2425,7 @@ local function toggle_panel(state)
     ui_set_shown(style, on)
     render_panel()
     render_prbar()
+    render_timeline()
     if save_ui_state then save_ui_state() end      -- 快捷键 / 按钮 / 脚本消息，任何路径都立即落盘
     if on then
         if style == 'prbar' then
@@ -2252,6 +2447,7 @@ local function switch_osd_style()
     apply_osc_for_style()          -- 换样式 = 连内置播放条一起换（老样式要 OSC，Pr 风格不要）
     render_panel()
     render_prbar()
+    render_timeline()
     -- 状态机必须把"切到哪"打进日志（否则"没反应"和"切错了"分不清）
     log('OSD 样式切换 → %s（panel=%s bar=%s）', UI.style, tostring(UI.panel), tostring(UI.bar))
     if save_ui_state then save_ui_state() end
@@ -2711,6 +2907,7 @@ end
 redraw_ui = function()
     if UI.panel then render_panel() end
     if UI.bar then render_prbar() end
+    render_timeline()
     if UI.help then show_help(true) end
     render_mode_badge()
 end
@@ -2881,6 +3078,7 @@ mp.observe_property('osd-dimensions', 'native', function(_, d)
     last_osd = { w, h }
     if UI.panel then render_panel() end
     if UI.bar then render_prbar() end
+    render_timeline()
     if UI.help then show_help(true) end
 end)
 
@@ -3214,6 +3412,19 @@ mp.register_script_message('hover', function(name)
     render_panel()
     render_prbar()
 end)
+-- 第 9 条：时间轴"取证钩子" —— 直接设定可见范围（自动化测试用；不给参数 = 回到整片）。
+-- r46 的缩放/平移走的是同一套状态，所以它同时也是那两个功能的测试入口。
+mp.register_script_message('tl', function(a, b)
+    local t0, t1 = tonumber(a), tonumber(b)
+    if t0 and t1 and t1 > t0 then
+        TL.t0, TL.t1 = t0, t1
+        log('时间轴范围设为 %.3f ~ %.3f', t0, t1)
+    else
+        TL.t0, TL.t1 = nil, nil
+        log('时间轴范围回到整片')
+    end
+    render_timeline()
+end)
 mp.register_script_message('state', function()
     print(json_encode({
         sidecar_enabled = o.sidecar,
@@ -3254,6 +3465,7 @@ mp.register_event('file-loaded', function()
         -- 从上次会话保留的状态：重新渲染一次
         render_panel()
         render_prbar()
+        render_timeline()
     end
 end)
 
@@ -3271,6 +3483,17 @@ mp.observe_property('time-pos', 'number', function()
     if (UI.panel or UI.bar or UI.help or UI.mode or UI.edit) and redraw_ui then redraw_ui() end
 end)
 
+-- 第 9 条：时间轴**自己的**观察者，节流 0.1s（10 Hz）—— 播放头要"看起来在走"，
+-- 控制栏仍用上面的 0.2s。载荷只有几十行，10 Hz 没压力。
+local last_tl_at = 0
+mp.observe_property('time-pos', 'number', function()
+    if not (UI.bar and UI.style == 'prbar' and o.tl) then return end
+    local now = os.clock()
+    if now - last_tl_at < 0.1 then return end
+    last_tl_at = now
+    render_timeline()
+end)
+
 mp.register_event('shutdown', function()
     save_sidecar()
     save_ui_state()
@@ -3278,7 +3501,7 @@ end)
 
 write_key_template()
 check_key_conflicts()
-msg.info(string.format('source-markers 1.2.0-alpha r44 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
+msg.info(string.format('source-markers 1.2.0-alpha r45 已加载：%d 个快捷键（%s 帮助 / %s 按钮面板）；sidecar=%s（隐藏=%s）；time_format=%s；正文输入=%s',
     #ACTIONS, key_of('help'), key_of('toggle-panel'),
     tostring(o.sidecar), tostring(o.hide_sidecar), tostring(o.time_format),
     input and 'mp.input（播放器内输入框）' or 'python 兜底对话框'))
