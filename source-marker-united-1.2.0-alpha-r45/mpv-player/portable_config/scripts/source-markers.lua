@@ -2221,13 +2221,27 @@ end
 local function tl_metrics()
     local w, h = osd_size()
     local bm = prbar_metrics()                    -- 与控制栏同一套缩放；位置贴着控制栏正上方
-    local width = math.min(math.floor(w * 0.62), w - 80)
+    local s = bm.scale
+    -- 比例尺要大一些（原来 62% 显得比下面控制栏"内容多、格子挤"）
+    local width = math.min(math.floor(w * 0.84), w - 60)
     if width < 280 then width = math.max(200, w - 40) end
-    local height = math.floor(66 * bm.scale + 0.5)
+    -- 每行高度只在这里算一次；render_timeline 按同一套数字排位置，总高也由它们累加，
+    -- 这样"最底下那条横线"永远真的落在块底部（用户第 ⑤ 条：箭头和竖条都要落在它上面）
+    local pad     = math.max(5, math.floor(6 * s + 0.5))
+    local tc_sz   = math.max(10, math.floor(11 * s + 0.5))
+    local ov_h    = math.max(6, math.floor(7 * s + 0.5))
+    local lab_sz  = math.max(9, tc_sz - 2)
+    local mh      = math.max(5, math.floor(7 * s + 0.5))
+    local tick_h  = math.max(3, math.floor(5 * s + 0.5))
+    local tick_h2 = math.max(6, math.floor(8 * s + 0.5))
+    local gap     = math.max(1, math.floor(2 * s + 0.5))
+    local height  = pad + tc_sz + gap + ov_h + gap + lab_sz + gap + mh + tick_h2 + pad
     local x = math.max(8, math.floor((w - width) / 2))
-    local y = math.max(8, bm.y - height - math.floor(6 * bm.scale + 0.5))
-    return { w = w, h = h, scale = bm.scale, x = x, y = y, width = width, height = height,
-             pad = math.floor(9 * bm.scale + 0.5) }
+    local y = math.max(8, bm.y - height - math.floor(6 * s + 0.5))
+    return { w = w, h = h, scale = s, x = x, y = y, width = width, height = height,
+             pad = pad, tc_sz = tc_sz, ov_h = ov_h, lab_sz = lab_sz, mh = mh,
+             tick_h = tick_h, tick_h2 = tick_h2, gap = gap,
+             mw = math.max(5, math.floor(6 * s + 0.5)) }
 end
 
 local function render_timeline()
@@ -2246,17 +2260,20 @@ local function render_timeline()
     local span = t1 - t0
     local lines = { round_rect_line(m.x, m.y, m.width, m.height, math.floor(8 * s + 0.5), '&H1E1E1E&', '18') }
 
-    -- 行高从上往下推，避免写死偏移
-    local tc_sz = math.max(11, math.floor(12 * s + 0.5))
-    local ov_h  = math.max(6, math.floor(8 * s + 0.5))
-    local rl_h  = math.max(14, math.floor(22 * s + 0.5))
+    -- 行位置全部由 tl_metrics 的同一套高度推出来（那里算总高，这里排位置，不许各写一份）
+    -- 从上往下：两端时间码 → 概览 ⚪==⚪ → 刻度标签（单独一行，不再和标记打架）→ 标记 ▼ 与刻度尺
+    local tc_sz, ov_h, lab_sz = m.tc_sz, m.ov_h, m.lab_sz
+    local mh, tick_h, tick_h2, gap, mw = m.mh, m.tick_h, m.tick_h2, m.gap, m.mw
     local cy = m.y + pad
     local row_tc = cy
-    cy = cy + tc_sz + math.floor(2 * s + 0.5)
+    cy = cy + tc_sz + gap
     local row_ov = cy
-    cy = cy + ov_h + math.floor(3 * s + 0.5)
-    local row_rl = cy
-    local rl_bottom = row_rl + rl_h
+    cy = cy + ov_h + gap
+    local row_lab = cy
+    cy = cy + lab_sz + gap
+    local row_mk = cy
+    local rl_y = m.y + m.height - pad - 1     -- 基线 = 整块最底下那条横线（第 ⑤ 条）
+    local ph = mh + tick_h2                   -- 播放头 ▼ 高度：顶到标记那一行，尖端正好落在基线上
 
     local function t2x(t)
         local x = x0 + (t - t0) / span * rw
@@ -2285,7 +2302,6 @@ local function render_timeline()
     end
 
     -- ③ 刻度尺：按可见跨度自动选步长（至少每 6px 一格；标签约每 72px 一个）
-    local rl_y = rl_bottom - 1
     lines[#lines + 1] = rect_line(x0, rl_y, rw, 1, '&H5A5A5A&', '0')
     local steps = { 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600 }
     local step = steps[#steps]
@@ -2306,28 +2322,30 @@ local function render_timeline()
         if hh > 0 then return string.format('%d:%02d:%02d', hh, mm, ss) end
         return string.format('%02d:%02d', mm, ss)
     end
-    local lab_sz = math.max(10, tc_sz - 1)
     local lab_sample = tl_label(math.ceil(t0 / step) * step, step)
-    local lab_px = math.floor(visual_width(lab_sample) * lab_sz * 0.55) + 14
+    local lab_w = math.floor(visual_width(lab_sample) * lab_sz * 0.55)
+    local lab_px = lab_w + 14
     local label_every = math.max(1, math.ceil(lab_px / math.max(1, px_per_tick)))
-    local tick_h  = math.max(3, math.floor(5 * s + 0.5))
-    local tick_h2 = math.max(6, math.floor(9 * s + 0.5))
     local i, t = 0, math.ceil(t0 / step) * step
+    local prev_lab = -9999
     while t <= t1 + 1e-9 do
         local x = math.floor(t2x(t))
         local big = (i % label_every == 0)
         local hh = big and tick_h2 or tick_h
         lines[#lines + 1] = rect_line(x, rl_y - hh, 1, hh, '&H6E6E6E&', '0')
         if big then
-            lines[#lines + 1] = text_line(x + 3, rl_y - tick_h2 - lab_sz - 1, lab_sz, '&H7A8A9A&', tl_label(t, step))
+            -- 标签自己占一行（在标记之上）；最右端会被夹回框内（用户第 ③ 条：竖屏更常见）
+            local lx = math.min(x + 3, x1 - lab_w)
+            if lx >= x0 and lx >= prev_lab + lab_w + math.floor(6 * s + 0.5) then
+                prev_lab = lx
+                lines[#lines + 1] = text_line(lx, row_lab, lab_sz, '&H7A8A9A&', tl_label(t, step))
+            end
         end
         t = t + step
         i = i + 1
     end
 
     -- ④ 标记 ▼（彩色；同一个像素位置只画一个 —— 密集时否则糊成实心带）
-    local mh = math.max(5, math.floor(7 * s + 0.5))
-    local mw = math.max(5, math.floor(6 * s + 0.5))
     local last_x = -999
     for _, mk in ipairs(S.markers) do
         if mk.t >= t0 and mk.t <= t1 then
@@ -2335,9 +2353,11 @@ local function render_timeline()
             if x - last_x >= 2 then
                 last_x = x
                 local c = ass_color(mk.color or 0)
-                lines[#lines + 1] = poly_line(math.floor(x - mw / 2), rl_y - tick_h2 - mh, mw / 20, c, '00',
-                    { 0, 0, 20, 0, 10, 20 })
-                lines[#lines + 1] = rect_line(math.floor(x), rl_y - tick_h2, 1, tick_h2, c, '70')
+                -- 中心线取 +0.5：1px 的竖线画在 [cx,cx+1)，中心是 cx+0.5，箭头按同一条中心对称
+                local cx = math.floor(x) + 0.5
+                lines[#lines + 1] = poly_line(cx - mw / 2, rl_y - tick_h2 - mh, mw / 20, c, '00',
+                    { 0, 0, 20, 0, 10, mh * 20 / mw })
+                lines[#lines + 1] = rect_line(math.floor(cx), rl_y - tick_h2, 1, tick_h2, c, '70')
             end
         end
     end
@@ -2349,8 +2369,10 @@ local function render_timeline()
         local xo = OUT_FRAME and t2x(frame_seconds(OUT_FRAME)) or nil
         xi_x, xo_x = xi, xo
         local band = RANGE_ARMED and '&H2A6E2A&' or '&H6E4A2A&'
+        -- 括号与淡色带从刻度标签那一行一直画到基线（Pr 的出入点括号也是整条高度）
+        local bh = rl_y - row_lab + 1
         if xi and xo and xo > xi then
-            lines[#lines + 1] = rect_line(math.floor(xi), row_rl, math.max(1, math.floor(xo - xi)), rl_h, band, '70')
+            lines[#lines + 1] = rect_line(math.floor(xi), row_lab, math.max(1, math.floor(xo - xi)), bh, band, '70')
         end
         local bw = math.max(2, math.floor(2 * s + 0.5))
         local arm = math.max(4, math.floor(5 * s + 0.5))
@@ -2358,8 +2380,8 @@ local function render_timeline()
             local x = spec[1]
             if x then
                 local ax = math.floor(x - (spec[2] < 0 and arm or 0))
-                lines[#lines + 1] = rect_line(math.floor(x), row_rl - 3, bw, rl_h + 3, '&HFFFFFF&', '10')
-                lines[#lines + 1] = rect_line(ax, row_rl - 3, arm, bw, '&HFFFFFF&', '10')
+                lines[#lines + 1] = rect_line(math.floor(x), row_lab, bw, bh, '&HFFFFFF&', '10')
+                lines[#lines + 1] = rect_line(ax, row_lab, arm, bw, '&HFFFFFF&', '10')
                 lines[#lines + 1] = rect_line(ax, rl_y - bw, arm, bw, '&HFFFFFF&', '10')
             end
         end
@@ -2368,19 +2390,18 @@ local function render_timeline()
     -- ⑥ 播放头：在范围内 = 竖线 + 顶部 ▼；在范围外 = 对应边缘画方向小箭头（用户定的）
     local t = head_time()
     if t then
+        local PL = '&HFFA64D&'
         if t >= t0 and t <= t1 then
-            local x = math.floor(t2x(t))
-            lines[#lines + 1] = rect_line(x, row_rl, math.max(1, math.floor(1.5 * s + 0.5)), rl_h + tick_h2,
-                '&HFFA64D&', '10')
-            lines[#lines + 1] = poly_line(x - math.floor(mw / 2), rl_y - tick_h2 - mh, mw / 20, '&HFFA64D&', '00',
-                { 0, 0, 20, 0, 10, 20 })
+            -- 竖条与箭头共用同一条中心线 cx（用户第 ④ 条：原先差几个像素）；箭头更高、尖端落在基线上（第 ⑤ 条）
+            local cx = math.floor(t2x(t)) + 0.5
+            lines[#lines + 1] = rect_line(math.floor(cx), row_lab, 1, rl_y - row_lab + 1, PL, '30')
+            lines[#lines + 1] = poly_line(cx - mw / 2, rl_y - ph, mw / 20, PL, '00',
+                { 0, 0, 20, 0, 10, ph * 20 / mw })
         elseif t < t0 then
-            local hgt = rl_h - 4
-            lines[#lines + 1] = poly_line(x0 + 2, row_rl + 2, hgt / 20, '&HFFA64D&', '20',
+            lines[#lines + 1] = poly_line(x0 + 2, rl_y - ph, ph / 20, PL, '20',
                 { 20, 0, 0, 10, 20, 20 })
         else
-            local hgt = rl_h - 4
-            lines[#lines + 1] = poly_line(x1 - hgt - 2, row_rl + 2, hgt / 20, '&HFFA64D&', '20',
+            lines[#lines + 1] = poly_line(x1 - ph - 2, rl_y - ph, ph / 20, PL, '20',
                 { 0, 0, 20, 10, 0, 20 })
         end
     end
