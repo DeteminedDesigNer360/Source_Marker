@@ -80,6 +80,7 @@ local o = {
     bar_tooltip = false,       -- 第 8 条：鼠标悬停时在按钮上方显示按钮名（默认关）
     tl = true,                 -- 第 9 条：Pr 风格下是否显示那条可缩放时间轴（默认开）
     tl_scale = 2.0,            -- 第 9 条：时间轴自己的缩放因子（Pr 里时间轴高度 ≈ 控制栏的 2~3 倍）
+    tl_min_frames = 15,        -- 第 9 条：时间轴最小跨度（帧）——滚轮最多放大到这么多帧
     tl_labels = true,          -- 第 9 条：刻度上是否显示时间戳（Pr 没有；默认开）
     tl_ov_map = 'linear',      -- 第 9 条：概览条映射 linear（所见即真实比例）| sqrt（Pr 那种压缩，默认不用）
 }
@@ -1550,6 +1551,14 @@ local BIND_PREFIX = SCRIPT_NAME .. '/'
 -- 动作表与处理函数表：先声明，后填充（帮助/面板/快捷键都读同一份）
 local ACTIONS, HANDLERS = {}, {}
 
+-- 第 9 条 r46：时间轴自己的三个键位（默认值；keys.conf 可改）。
+-- 单独一张表，**不能进 ACTIONS** —— ACTIONS 同时驱动按钮面板与帮助，塞进去控制栏会多出按钮。
+local TL_KEYS = {
+    { name = 'tl-zoom-in',  key = 'Alt+=', label = '时间轴放大' },
+    { name = 'tl-zoom-out', key = 'Alt+-', label = '时间轴缩小' },
+    { name = 'tl-reset',    key = 'Alt+0', label = '时间轴回到整片' },
+}
+
 -- ── 第 5 条：键位覆盖表 ────────────────────────────────────────────────
 -- 文件：portable_config/script-opts/source-markers-keys.conf
 --   一行一条  动作名 = 按键      # 没写的用默认；写 none 表示禁用该键
@@ -1793,6 +1802,10 @@ local function show_help(state)
     for _, a in ipairs(ACTIONS) do
         if not a.compact then rows[#rows + 1] = a end     -- 颜色单独用一行汇总，列出 8 条太占地方
     end
+    -- 第 9 条 r46：时间轴三个键也进帮助（不进 ACTIONS —— ACTIONS 同时驱动按钮面板，塞进去会多出按钮）
+    for _, s in ipairs(TL_KEYS) do
+        rows[#rows + 1] = { key = eff_key(s.name, s.key) or '（已禁用）', help = '时间轴：' .. s.label }
+    end
     local wrapped, row_lines = {}, 0
     for ri, a in ipairs(rows) do
         wrapped[ri] = wrap_visual(a.help, text_units)
@@ -1803,6 +1816,7 @@ local function show_help(state)
         '鼠标党按 ' .. key_of('toggle-panel') .. ' 开 / 关 OSD，' .. key_of('switch-osd')
             .. ' 换样式（Pr 风格 = 控制栏 + 时间轴；老样式 = 按钮面板 + mpv 自带播放条）；两种都能点。',
         'Pr 风格控制栏按钮（左→右）：上一个标记 · 打标记 · 下一个标记 · 标记入点 · 标记出点 · 转到入点 · 后退一帧 · 播放/暂停 · 向前一帧 · 转到出点 · 截取当前帧',
+        '时间轴：滚轮以播放头为轴缩放（Ctrl 更细、Shift 更粗），Alt+滚轮左右平移，Alt+0 回到整片。',
     }
     local hint_lines = {}
     for _, s in ipairs(hints) do
@@ -2208,11 +2222,30 @@ end
 -- 第 9 条：可缩放时间轴（Pr 源监视器风格）—— r45 静态版
 ----------------------------------------------------------------------
 -- 状态：nil = 整片；r46 的缩放/平移只改这两个值（渲染永远从它们出发）
-local TL = { t0 = nil, t1 = nil }
+-- cur_file / saved 用来"只记住同一个文件的范围"（换文件不继承别人的窗口）
+local TL = { t0 = nil, t1 = nil, cur_file = nil, saved = nil }
+
+-- 当前文件的"键"（只用文件名：同一文件在不同入口写法可能不同，basename 更稳）
+TL.file_key = function()
+    local p = mp.get_property('path') or ''
+    return (p:match('[^\\/]*$') or p)
+end
 
 local function tl_span()
     local dur = mp.get_property_number('duration')
     if not dur or dur <= 0 then return nil end
+    -- 第 9 条 r46：换文件时只把"这个文件上次的范围"接回来；别的文件的范围不继承
+    local path = TL.file_key()
+    if path ~= TL.cur_file then
+        TL.cur_file = path
+        local saved = TL.saved
+        TL.saved = nil
+        if saved and saved.file == path then
+            TL.t0, TL.t1 = saved.t0, saved.t1
+        else
+            TL.t0, TL.t1 = nil, nil
+        end
+    end
     local t0 = TL.t0 or 0
     local t1 = TL.t1 or dur
     if t0 < 0 then t0 = 0 end
@@ -2253,6 +2286,7 @@ local function render_timeline()
     local t0, t1, dur = tl_span()
     if not (UI.bar and UI.style == 'prbar' and o.tl) or not t0 then
         set_overlay(overlay_tl, nil, m.w, m.h)
+        if TL.place then TL.place(nil) end          -- 隐藏时把可点区域一并清掉
         return
     end
     local s = m.scale
@@ -2297,8 +2331,10 @@ local function render_timeline()
     -- ① 两端时间码 = 可见范围的起点 / 终点
     local ltxt = to_timecode(t0, fps)
     local rtxt = to_timecode(t1, fps)
+    local wl = math.floor(visual_width(ltxt) * tc_sz * 0.55)
+    local wr = math.floor(visual_width(rtxt) * tc_sz * 0.55)
     lines[#lines + 1] = text_line(x0, row_tc, tc_sz, '&HB8C4D0&', ltxt)
-    lines[#lines + 1] = text_line(x1 - math.floor(visual_width(rtxt) * tc_sz * 0.55), row_tc, tc_sz, '&HB8C4D0&', rtxt)
+    lines[#lines + 1] = text_line(x1 - wr, row_tc, tc_sz, '&HB8C4D0&', rtxt)
 
     -- ② 概览 ⚪==⚪（在刻度基线**下面**）：深色轨道 = 整片可滑动范围，亮段 = 当前可见范围，两端各一个圆
     --    tl_ov_map=sqrt 用 Pr 那种压缩映射（亮段比真实比例长 = 极小区间也抓得住，代价是"看到的长度"不真实）
@@ -2312,12 +2348,18 @@ local function render_timeline()
     end
     local wx0 = x0 + ov_frac(t0 / dur) * rw
     local wx1 = x0 + ov_frac(t1 / dur) * rw
-    lines[#lines + 1] = rect_line(math.floor(wx0), ov_mid - 1, math.max(1, math.floor(wx1 - wx0)), 2, '&HD0D0D0&', '0')
     local cr = math.max(3, math.floor(3.6 * s + 0.5))
-    for _, cx in ipairs({ math.floor(wx0), math.floor(wx1) }) do
-        lines[#lines + 1] = poly_line(cx - cr - 1, ov_mid - cr - 1, (cr + 1) / 10, '&H101010&', '40',
+    local grk = (TL.grab and TL.grab.kind) or ''      -- 抓取中：对应抓手画亮（r46）
+    lines[#lines + 1] = rect_line(math.floor(wx0), ov_mid - 1, math.max(1, math.floor(wx1 - wx0)), 2,
+        (grk == 'mid') and '&HFFFFFF&' or '&HD0D0D0&', '0')
+    for i, xc in ipairs({ wx0, wx1 }) do
+        local hot = (grk == ((i == 1) and 'left' or 'right'))
+        local cx = math.floor(xc)
+        local r = hot and (cr + 2) or cr
+        lines[#lines + 1] = poly_line(cx - r - 1, ov_mid - r - 1, (r + 1) / 10, '&H101010&', '40',
             circle_pts(10, 10, 10))
-        lines[#lines + 1] = poly_line(cx - cr, ov_mid - cr, cr / 10, '&HE8E8E8&', '00', circle_pts(10, 10, 10))
+        lines[#lines + 1] = poly_line(cx - r, ov_mid - r, r / 10, hot and '&HFFFFFF&' or '&HE8E8E8&', '00',
+            circle_pts(10, 10, 10))
     end
 
     -- ⑥a 播放头竖条：**先画**，下面的刻度会盖在它上面（Pr 的行为：刻度在播放头上层）
@@ -2476,14 +2518,305 @@ local function render_timeline()
     end
 
     set_overlay(overlay_tl, lines, m.w, m.h)
+    -- r46：把这一帧的几何交给鼠标交互（一个 section 覆盖整块，按 y 落在哪一行分派）
+    if TL.place then
+        TL.place({
+            x0 = x0, x1 = x1, rw = rw, t0 = t0, t1 = t1, span = span, dur = dur, fps = fps,
+            y_tc = row_tc, h_tc = tc_sz, y_lab = row_lab, rl_y = rl_y,
+            y_ov = row_ov, h_ov = ov_h, w_l = wl, w_r = wr, wx0 = wx0, wx1 = wx1,
+        })
+    end
     -- 中间量打进日志（位置类问题只能靠它精确定位，别靠肉眼数像素）
-    msg.verbose(string.format('时间轴：范围 %.3f~%.3f ｜ 画布 x %d..%d ｜ 行数 %d ｜ 大刻度 %.4fs×%d段 ｜ 标签%s 首标=%s ｜ 入=%s 出=%s ｜ 播放头=%s',
+    msg.verbose(string.format('时间轴：范围 %.3f~%.3f ｜ 画布 x %d..%d ｜ 行数 %d ｜ 大刻度 %.4fs×%d段 ｜ 标签%s 首标=%s ｜ 入=%s 出=%s ｜ 播放头=%s ｜ 几何 tc=%d,%d 标签行=%d 基线=%d 概览=%d 概览x=%d,%d 码宽=%d/%d',
         t0, t1, x0, x1, #lines,
         step, parts or 0, o.tl_labels and 'on' or 'off', first_lab ~= '' and first_lab or '（无）',
         xi_x and string.format('%.0f', xi_x) or '无', xo_x and string.format('%.0f', xo_x) or '无',
         t and string.format('%.3f 吸帧=%s 帧宽=%.1fpx 头x=%.0f', t, fi and tostring(fi) or '关',
-            frame_px, cx_pl or -1) or '无'))
+            frame_px, cx_pl or -1) or '无',
+        row_tc, tc_sz, row_lab, rl_y, row_ov, wx0, wx1, wl, wr))
 end
+
+----------------------------------------------------------------------
+-- 第 9 条 r46：时间轴的缩放 / 平移（滚轮 + 键盘 + 脚本绑定）
+----------------------------------------------------------------------
+-- 约定（与用户对齐）：
+--   · 滚轮以【播放头】为轴缩放；播放头不在可见范围内时以最近的那条边为轴（那条边不动）
+--   · 单滚 = 中步长；Ctrl+滚轮 = 细；Shift+滚轮 = 粗
+--   · Alt+滚轮 = 左右平移，Shift+Alt+滚轮 = 粗平移；Ctrl+Alt+滚轮 不占用（留给用户/mpv）
+--   · 键盘默认 Alt+= / Alt+- / Alt+0（keys.conf 可改）
+--   · 最小跨度 = tl_min_frames 帧（默认 15 帧：Pr 实测也是十几帧，一帧一格不是给人用的）
+--   · 范围跨重启记住 —— 但只记"同一个文件"的（ui.json 里 tl_file / tl_t0 / tl_t1）
+local function tl_init()      -- 整块塞进一个函数：Lua 5.1 主块最多 200 个 local，这个文件已经很挤
+local TL_STEP = { plain = 1.5, ctrl = 1.12, shift = 2.5 }
+local TL_PAN  = { plain = 0.10, shift = 0.25 }
+
+local function tl_min_span()
+    local fr = tonumber(o.tl_min_frames) or 15
+    if fr < 1 then fr = 1 end
+    return fr / (get_fps() or 25)
+end
+
+-- 夹取：最小跨度 + 不出片头/片尾（full=true 表示等于整片，此时 TL 里存 nil）
+local function tl_clamp_range(t0n, t1n, dur)
+    local minspan = tl_min_span()
+    if minspan > dur then minspan = dur end
+    local span = t1n - t0n
+    if span < minspan then                       -- 太小 ⇒ 中心不动，放大到最小跨度
+        local c = (t0n + t1n) / 2
+        t0n, t1n = c - minspan / 2, c + minspan / 2
+        span = minspan
+    end
+    if span >= dur - 1e-9 then return 0, dur, true end
+    if t0n < 0 then t0n, t1n = 0, span end
+    if t1n > dur then t1n, t0n = dur, dur - span end
+    return t0n, t1n, false
+end
+
+-- 统一入口：夹取 → 落盘 → 重绘 → 记日志（why 会打进日志，自动化测试靠它认路）
+local function tl_set_range(t0n, t1n, why, save)
+    local dur = mp.get_property_number('duration')
+    if not dur or dur <= 0 then return end
+    local t0c, t1c, full = tl_clamp_range(t0n, t1n, dur)
+    TL.t0 = full and nil or t0c
+    TL.t1 = full and nil or t1c
+    if save ~= false and save_ui_state then save_ui_state() end
+    log('时间轴%s：范围 %.3f ~ %.3f（跨度 %.3f / 整片 %.3f）',
+        why and ('·' .. why) or '设置', t0c, t1c, t1c - t0c, dur)
+    render_timeline()
+end
+
+local function tl_zoom(factor, why)
+    local t0c, t1c = tl_span()
+    local dur = mp.get_property_number('duration')
+    if not t0c or not dur then return end
+    local span = t1c - t0c
+    local anchor = mp.get_property_number('time-pos')
+    if not anchor then anchor = (t0c + t1c) / 2 end
+    if anchor < t0c then anchor = t0c end              -- 播放头在范围外 ⇒ 以最近的边为轴
+    if anchor > t1c then anchor = t1c end
+    local p = (anchor - t0c) / span
+    local newspan = span / factor
+    local minspan = tl_min_span()
+    if newspan < minspan then newspan = minspan end
+    if newspan > dur then newspan = dur end
+    local n0 = anchor - p * newspan
+    tl_set_range(n0, n0 + newspan, string.format('%s ×%.3f', why or '缩放', factor))
+end
+
+local function tl_pan(frac, why)
+    local t0c, t1c = tl_span()
+    local dur = mp.get_property_number('duration')
+    if not t0c or not dur then return end
+    local span = t1c - t0c
+    if span >= dur - 1e-9 then
+        notify('时间轴已经是整片（缩放之后才能平移）')
+        return
+    end
+    local n0 = t0c + span * frac
+    tl_set_range(n0, n0 + span, string.format('%s %+.0f%%', why or '平移', frac * 100))
+end
+
+local function tl_reset(why)
+    local dur = mp.get_property_number('duration')
+    if not dur or dur <= 0 then return end
+    tl_set_range(0, dur, why or '整片')
+end
+
+-- 动作名 → 行为：既给键位表用，也直接作为"脚本绑定"暴露（input.conf / script-binding 都能调）
+local TL_ACTIONS = {
+    ['tl-zoom-in']   = function() tl_zoom(TL_STEP.plain, '放大') end,
+    ['tl-zoom-out']  = function() tl_zoom(1 / TL_STEP.plain, '缩小') end,
+    ['tl-pan-left']  = function() tl_pan(-TL_PAN.plain, '左移') end,
+    ['tl-pan-right'] = function() tl_pan(TL_PAN.plain, '右移') end,
+    ['tl-reset']     = function() tl_reset('整片') end,
+}
+for name, fn in pairs(TL_ACTIONS) do mp.add_key_binding(nil, name, fn) end
+
+-- 键位表里的三个默认键（绑定名带键名 keytag —— 同一个名字重复 add_key_binding 会静默替换，这是老坑）
+for _, spec in ipairs(TL_KEYS) do
+    local k = eff_key(spec.name, spec.key)
+    if k then
+        local tag = tostring(k):gsub('[^%w]', '')
+        local ok, err = pcall(mp.add_key_binding, k, spec.name .. '-' .. tag, TL_ACTIONS[spec.name])
+        if not ok then log('时间轴键位绑定失败：key=%s name=%s err=%s', k, spec.name, tostring(err)) end
+    end
+end
+
+-- 滚轮：只要鼠标在 mpv 窗口里就吃（Pr 也是全窗口，不要求指针压在时间轴上）
+local function tl_bind_wheel(key, fn)
+    local ok, err = pcall(mp.add_key_binding, key, 'tl-wheel-' .. tostring(key):gsub('[^%w]', ''), fn)
+    if not ok then log('滚轮绑定失败 %s：%s', key, tostring(err)) end
+end
+tl_bind_wheel('wheel_up',   function() tl_zoom(TL_STEP.plain, '滚轮上') end)
+tl_bind_wheel('wheel_down', function() tl_zoom(1 / TL_STEP.plain, '滚轮下') end)
+tl_bind_wheel('Ctrl+wheel_up',   function() tl_zoom(TL_STEP.ctrl, 'Ctrl+滚轮上') end)
+tl_bind_wheel('Ctrl+wheel_down', function() tl_zoom(1 / TL_STEP.ctrl, 'Ctrl+滚轮下') end)
+tl_bind_wheel('Shift+wheel_up',   function() tl_zoom(TL_STEP.shift, 'Shift+滚轮上') end)
+tl_bind_wheel('Shift+wheel_down', function() tl_zoom(1 / TL_STEP.shift, 'Shift+滚轮下') end)
+tl_bind_wheel('Alt+wheel_up',   function() tl_pan(-TL_PAN.plain, 'Alt+滚轮上') end)
+tl_bind_wheel('Alt+wheel_down', function() tl_pan(TL_PAN.plain, 'Alt+滚轮下') end)
+tl_bind_wheel('Shift+Alt+wheel_up',   function() tl_pan(-TL_PAN.shift, 'Shift+Alt+滚轮上') end)
+tl_bind_wheel('Shift+Alt+wheel_down', function() tl_pan(TL_PAN.shift, 'Shift+Alt+滚轮下') end)
+
+----------------------------------------------------------------------
+-- r46 step2：鼠标交互 —— 刻度带单击跳转、双击回整片、点两端时间码输入跳转
+----------------------------------------------------------------------
+-- mpv 没有"鼠标松开"事件，拖动类交互统一走"点一下抓起 → 移动 → 再点一下放下"。
+-- 命中判定用 render_timeline 每帧存下来的几何（TL.geo）：一个 section 覆盖整块时间轴，
+-- 由点击的 y 落在哪一行决定行为（时间码行 / 刻度带 / 概览条）。
+TL.geo = nil
+local TL_SEC = 'sm_tl_click'
+local TL_LAST = { t = -10, x = -1e9 }
+
+-- ③ 概览条三个抓取区：左圆改起点、右圆改终点、中间整体平移。
+--    mpv 没有"鼠标松开"事件 ⇒ 「点一下抓起 → 移动鼠标改范围 → 再点一下放下」，ESC 放弃（回到抓起前）。
+TL.grab = nil
+
+local function tl_grab_start(g, mx)
+    local kind = 'mid'
+    if math.abs(mx - g.wx0) <= 12 then kind = 'left'
+    elseif math.abs(mx - g.wx1) <= 12 then kind = 'right' end
+    TL.grab = { kind = kind, t0 = g.t0, t1 = g.t1 }
+    msg.verbose(string.format('时间轴·抓起 %s（%.3f ~ %.3f）：移动鼠标改范围，再点一下放下，ESC 放弃',
+        kind == 'left' and '左端' or (kind == 'right' and '右端' or '整段'), g.t0, g.t1))
+    render_timeline()
+end
+
+local function tl_grab_move(g, mx)
+    local gr = TL.grab
+    if not gr then return end
+    local tt = g.t0 + (mx - g.x0) / math.max(1, g.rw) * g.span     -- 鼠标所在位置对应的时间
+    local minspan = tl_min_span()
+    local n0, n1 = gr.t0, gr.t1
+    if gr.kind == 'left' then
+        n0 = math.max(0, math.min(tt, gr.t1 - minspan))            -- 左端跟鼠标，右端不动
+        n1 = gr.t1
+    elseif gr.kind == 'right' then
+        n1 = math.min(g.dur, math.max(tt, gr.t0 + minspan))        -- 右端跟鼠标，左端不动
+        n0 = gr.t0
+    else
+        local d = tt - g.t0                                        -- 整段平移（不出片头片尾）
+        n0, n1 = gr.t0 + d, gr.t1 + d
+        if n0 < 0 then n1, n0 = n1 - n0, 0 end
+        if n1 > g.dur then n0, n1 = n0 - (n1 - g.dur), g.dur end
+    end
+    local c0, c1 = TL.t0 or 0, TL.t1 or g.dur                      -- 没变就别重绘（鼠标一动会来很多次）
+    if math.abs(c0 - n0) < 1e-6 and math.abs(c1 - n1) < 1e-6 then return end
+    tl_set_range(n0, n1, gr.kind == 'left' and '抓取左端' or (gr.kind == 'right' and '抓取右端' or '抓取平移'))
+end
+
+mp.observe_property('mouse-pos', 'native', function(_, p)
+    if TL.grab and p and p.x and TL.geo then tl_grab_move(TL.geo, p.x) end
+end)
+mp.add_key_binding('ESC', 'tl-grab-cancel', function()
+    if TL.grab then
+        local gr = TL.grab
+        TL.grab = nil
+        tl_set_range(gr.t0, gr.t1, '放弃抓取')
+    else
+        mp.commandv('set', 'fullscreen', 'no')      -- ESC 在 mpv 里的默认行为，别被我们吃掉
+    end
+end)
+-- 取证钩子：本机不能注入鼠标，用 tl-drag 直接喂一个 x 给抓取逻辑
+mp.register_script_message('tl-drag', function(x)
+    if TL.grab and TL.geo then tl_grab_move(TL.geo, tonumber(x)) end
+end)
+
+local function tl_click(fx, fy)
+    local g = TL.geo
+    if not g then return end
+    local mx, my = fx, fy
+    if not mx then
+        local p = mp.get_property_native('mouse-pos')
+        if not (p and p.x) then return end
+        mx, my = p.x, p.y
+    end
+    local now = mp.get_time()
+    local dbl = (now - TL_LAST.t < 0.40) and math.abs(mx - TL_LAST.x) <= 14
+    TL_LAST.t, TL_LAST.x = now, mx
+
+    local function seek_frame(tt, why)
+        local fr = math.floor(tt * g.fps + 1e-6)         -- 与"吸帧"同一口径：跳到帧起点
+        if fr < 0 then fr = 0 end
+        local st = fr / g.fps
+        if st > g.dur then st = g.dur end
+        mp.set_property_number('time-pos', st)
+        msg.verbose(string.format('时间轴·%s → %.3f（帧 %d）', why, st, fr))
+    end
+
+    -- ① 两端时间码那一行：点左框改起点、点右框改终点（Pr 是点它自己输入跳转）
+    if my >= g.y_tc - 2 and my <= g.y_tc + g.h_tc + 2 then
+        local side
+        if mx <= g.x0 + g.w_l + 4 then side = 'left'
+        elseif mx >= g.x1 - g.w_r - 4 then side = 'right' end
+        if side then
+            local def = to_timecode(side == 'left' and g.t0 or g.t1, g.fps)
+            msg.verbose(string.format('时间轴·打开时间码输入框（%s端 %s）',
+                side == 'left' and '左' or '右', def))
+            ask_text('跳到时间码（hh:mm:ss:ff 或 hh:mm:ss.mmm）', def, function(str)
+                if not str then return end                     -- ESC 关掉输入框 = 不改
+                local v = parse_time(str, g.fps)
+                if v == nil then notify('时间码看不懂：' .. str) return end
+                seek_frame(v, '输入' .. (side == 'left' and '左' or '右') .. '端时间码')
+            end)
+        end
+        return
+    end
+
+    -- ② 刻度带：单击跳到该处（吸到帧头），双击回整片
+    if my >= g.y_lab - 2 and my <= g.rl_y + 1 then
+        if dbl then tl_reset('双击刻度带') return end
+        seek_frame(g.t0 + (mx - g.x0) / math.max(1, g.rw) * g.span, '点击刻度带')
+        return
+    end
+
+    -- ③ 概览条（基线下方）：抓起 / 放下
+    if my > g.rl_y + 1 then
+        if TL.grab then
+            msg.verbose('时间轴·放下（' .. TL.grab.kind .. '）')
+            TL.grab = nil
+            render_timeline()
+        else
+            tl_grab_start(g, mx)
+        end
+        return
+    end
+end
+
+mp.commandv('define-section', TL_SEC, 'mbtn_left script-binding ' .. BIND_PREFIX .. 'tl-click', 'force')
+mp.add_key_binding(nil, 'tl-click', tl_click)
+-- 自动化取证钩子：tl-hit 用给定坐标走一遍点击（本机不能注入鼠标）；tl-goto 直接按时间码跳
+mp.register_script_message('tl-hit', function(x, y)
+    tl_click(tonumber(x), tonumber(y))
+end)
+mp.register_script_message('tl-goto', function(str)
+    local g = TL.geo
+    if not g then return end
+    local v = parse_time(str, g.fps)
+    if v == nil then msg.verbose('时间轴·时间码看不懂：' .. tostring(str)) return end
+    local fr = math.floor(v * g.fps + 1e-6)
+    mp.set_property_number('time-pos', fr / g.fps)
+    msg.verbose(string.format('时间轴·输入 %s → %.3f（帧 %d）', str, fr / g.fps, fr))
+end)
+
+-- 每次重绘摆好可点区域；时间轴隐藏时清空（与 bar_sections_off 同一套做法）
+TL.place = function(g)
+    TL.geo = g
+    if g then
+        mp.set_mouse_area(g.x0 - 2, g.y_tc - 2, g.x1 + 4, g.y_ov + g.h_ov + 2, TL_SEC)
+        mp.commandv('enable-section', TL_SEC)
+    else
+        mp.set_mouse_area(0, 0, 0, 0, TL_SEC)
+        mp.commandv('disable-section', TL_SEC)
+    end
+end
+
+-- 对外接口：第 9 条 r46 的点击/拖动（下一小步）与自动化测试都从这里调用
+TL.zoom, TL.pan, TL.reset = tl_zoom, tl_pan, tl_reset
+TL.set_range, TL.min_span, TL.clamp_range = tl_set_range, tl_min_span, tl_clamp_range
+TL.ACTIONS = TL_ACTIONS
+end
+tl_init()
 
 -- 第 9 条：内置 OSC 跟随样式 —— 老样式（按钮面板）要 mpv 自带的底部播放条；
 -- Pr 风格（控制栏 + 时间轴）用我们自己的，就把内置 OSC 关掉。
@@ -3203,6 +3536,10 @@ local function load_ui_state()
         if d.style == 'prbar' or d.style == 'panel' then UI.style = d.style end
         if d.bar ~= nil then UI.bar = d.bar == true end
         if UI.bar then UI.panel = false end          -- 互斥：文件里两个都开时以控制栏为准
+        -- 第 9 条 r46：时间轴的可见范围跨重启记住（只对"同一个文件"生效，换文件不继承）
+        if d.tl_file and tonumber(d.tl_t0) and tonumber(d.tl_t1) then
+            TL.saved = { file = tostring(d.tl_file), t0 = tonumber(d.tl_t0), t1 = tonumber(d.tl_t1) }
+        end
     end
 end
 
@@ -3213,6 +3550,7 @@ save_ui_state = function()
     write_file_atomic(p, json_encode({
         panel = UI.panel, help = UI.help, show_list = S.show_list, hint_shown = UI.hint_shown, mode = UI.mode,
         style = UI.style, bar = UI.bar,
+        tl_file = TL.cur_file, tl_t0 = TL.t0, tl_t1 = TL.t1,   -- 第 9 条 r46：时间轴可见范围
     }))
 end
 
@@ -3291,6 +3629,10 @@ mp.register_script_message('ui-state', function(path)
     for _, a in ipairs(ACTIONS) do
         keys[#keys + 1] = { key = a.key, name = a.name, label = a.label, help = a.help }
     end
+    for _, s in ipairs(TL_KEYS) do                     -- 第 9 条 r46：时间轴三个键也报给外部工具
+        keys[#keys + 1] = { key = eff_key(s.name, s.key), name = s.name, label = s.label,
+                            help = '时间轴：' .. s.label }
+    end
     local swatch_fg, swatch_oc = {}, {}
     for i = 0, 7 do
         local fg, oc = swatch_colors(i)
@@ -3334,6 +3676,7 @@ local function key_all_known()
     for _, a in ipairs(ACTIONS) do known[a.name] = true end
     for _, s in ipairs(MODE_KEYS) do known[s.name] = true end
     for _, s in ipairs(EDIT_KEYS) do known[s.name] = true end
+    for _, s in ipairs(TL_KEYS) do known[s.name] = true end        -- 第 9 条 r46：时间轴三个键
     return known
 end
 
@@ -3360,6 +3703,11 @@ local function write_key_template()
         L[#L+1] = string.format('# %-24s = %s', s.name, s.default_key or s.key)
     end
     L[#L+1] = ''
+    L[#L+1] = '# —— 时间轴（Pr 风格控制栏）——'
+    for _, s in ipairs(TL_KEYS) do
+        L[#L+1] = string.format('# %-24s = %s', s.name, s.key)
+    end
+    L[#L+1] = ''
     L[#L+1] = '# —— 编辑态内（标记模式里按 ENTER 进入）——'
     for _, s in ipairs(EDIT_KEYS) do
         L[#L+1] = string.format('# %-24s = %s', s.name, s.default_key or s.key)
@@ -3381,6 +3729,7 @@ local function key_effective_map()
     for _, a in ipairs(ACTIONS) do add(a.name, a.key) end
     for _, s in ipairs(MODE_KEYS) do add(s.name, eff_key(s.name, s.default_key or s.key)) end
     for _, s in ipairs(EDIT_KEYS) do add(s.name, eff_key(s.name, s.default_key or s.key)) end
+    for _, s in ipairs(TL_KEYS) do add(s.name, eff_key(s.name, s.key)) end      -- 第 9 条 r46
     return eff, bykey
 end
 
@@ -3532,6 +3881,8 @@ mp.register_script_message('state', function()
         help = UI.help,
         hide_sidecar = o.hide_sidecar,
         input = input and 'mp.input' or 'fallback',
+        tl_t0 = TL.t0, tl_t1 = TL.t1, tl_file = TL.cur_file,
+        tl_min_frames = tonumber(o.tl_min_frames) or 15,
     }))
 end)
 
