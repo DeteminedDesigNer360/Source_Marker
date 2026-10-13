@@ -81,6 +81,7 @@ local o = {
     tl = true,                 -- 第 9 条：Pr 风格下是否显示那条可缩放时间轴（默认开）
     tl_scale = 2.0,            -- 第 9 条：时间轴自己的缩放因子（Pr 里时间轴高度 ≈ 控制栏的 2~3 倍）
     tl_min_frames = 15,        -- 第 9 条：时间轴最小跨度（帧）——滚轮最多放大到这么多帧
+    tl_zoom_steps = '1.10,1.03,1.35',  -- 第 9 条：滚轮缩放步长（普通,Ctrl细,Shift粗）——重启生效
     tl_labels = true,          -- 第 9 条：刻度上是否显示时间戳（Pr 没有；默认开）
     tl_ov_map = 'linear',      -- 第 9 条：概览条映射 linear（所见即真实比例）| sqrt（Pr 那种压缩，默认不用）
 }
@@ -2413,8 +2414,9 @@ local function render_timeline()
         if st < 1 then
             local fi = math.floor(idx * step * fps + 0.5)
             local sec, ff = math.floor(fi / fps_i), fi % fps_i
-            if cross_min then return string.format('%02d:%02d:%02d', math.floor(sec / 60), sec % 60, ff) end
-            return string.format('%02d:%02d', sec % 60, ff)
+            -- 帧档的标签带一个 f（11:23f）——一眼看出这是"秒:帧"而不是"分:秒"
+            if cross_min then return string.format('%02d:%02d:%02df', math.floor(sec / 60), sec % 60, ff) end
+            return string.format('%02d:%02df', sec % 60, ff)
         end
         local sec = math.floor(tt + 1e-6)
         local hh = math.floor(sec / 3600)
@@ -2547,8 +2549,16 @@ end
 --   · 最小跨度 = tl_min_frames 帧（默认 15 帧：Pr 实测也是十几帧，一帧一格不是给人用的）
 --   · 范围跨重启记住 —— 但只记"同一个文件"的（ui.json 里 tl_file / tl_t0 / tl_t1）
 local function tl_init()      -- 整块塞进一个函数：Lua 5.1 主块最多 200 个 local，这个文件已经很挤
-local TL_STEP = { plain = 1.5, ctrl = 1.12, shift = 2.5 }
+-- 步长（用户实测反馈：原来 ×1.5/×1.12/×2.5 整体偏粗，Ctrl 的手感已经像 Pr 的 Shift ⇒ 全部调细）；
+-- 可用 tl_zoom_steps = '普通,细,粗' 自己调（重启生效）
+local TL_STEP = { plain = 1.10, ctrl = 1.03, shift = 1.35 }
 local TL_PAN  = { plain = 0.10, shift = 0.25 }
+do
+    local a, b, c = tostring(o.tl_zoom_steps or ''):match('([%d%.]+)%s*,%s*([%d%.]+)%s*,%s*([%d%.]+)')
+    if tonumber(a) and tonumber(b) and tonumber(c) then
+        TL_STEP.plain, TL_STEP.ctrl, TL_STEP.shift = tonumber(a), tonumber(b), tonumber(c)
+    end
+end
 
 local function tl_min_span()
     local fr = tonumber(o.tl_min_frames) or 15
@@ -2586,6 +2596,7 @@ local function tl_set_range(t0n, t1n, why, save)
 end
 
 local function tl_zoom(factor, why)
+    if TL.grab then TL.drop('缩放') end
     local t0c, t1c = tl_span()
     local dur = mp.get_property_number('duration')
     if not t0c or not dur then return end
@@ -2604,6 +2615,7 @@ local function tl_zoom(factor, why)
 end
 
 local function tl_pan(frac, why)
+    if TL.grab then TL.drop('平移') end
     local t0c, t1c = tl_span()
     local dur = mp.get_property_number('duration')
     if not t0c or not dur then return end
@@ -2665,42 +2677,112 @@ tl_bind_wheel('Shift+Alt+wheel_down', function() tl_pan(TL_PAN.shift, 'Shift+Alt
 -- 命中判定用 render_timeline 每帧存下来的几何（TL.geo）：一个 section 覆盖整块时间轴，
 -- 由点击的 y 落在哪一行决定行为（时间码行 / 刻度带 / 概览条）。
 TL.geo = nil
-local TL_SEC = 'sm_tl_click'
+local TL_SEC = 'sm_tl_click'                              -- 时间轴本体（点击分派：时间码/刻度带/概览条）
+local TL_ANY = 'sm_tl_grab_any'                           -- 抓手期间：整窗口"点哪儿都放下"
+local TL_KEYSEC = 'sm_tl_grab_keys'                       -- 抓手期间：常用键"一按就放下"
 local TL_LAST = { t = -10, x = -1e9 }
 
--- ③ 概览条三个抓取区：左圆改起点、右圆改终点、中间整体平移。
---    mpv 没有"鼠标松开"事件 ⇒ 「点一下抓起 → 移动鼠标改范围 → 再点一下放下」，ESC 放弃（回到抓起前）。
+-- ③ 概览条三个抓取区：左圆改起点、右圆改终点、中间整体平移（一律**在概览条的尺度上跟鼠标 1:1**）。
+--    mpv 没有"鼠标松开"事件 ⇒ 「点一下抓起 → 移动鼠标改范围 → 再点一下放下」。
+--    用户 2026-10-13 实测反馈后修的三处：
+--      · 中间平移改成跟"抓起那一刻的鼠标位置"比位移（原来拿 t0 当基准 ⇒ 手一抖整条就跳出去）
+--      · 左右圆改成用概览条映射反算时间（原来用刻度尺尺度 ⇒ 一点就缩到最小、两个圆贴一起）
+--      · 抓取期间**任何点击或按键**都能打断（原来只能再点圆，两圆贴一起后点不到 ⇒ 卡死）
 TL.grab = nil
+
+-- 概览条 x → 时间（与画的时候同一套映射，反过来；tl_ov_map=sqrt 也一致）
+local function tl_ov_time(g, mx)
+    local f = (mx - g.x0) / math.max(1, g.rw)
+    if f < 0 then f = 0 elseif f > 1 then f = 1 end
+    if (o.tl_ov_map or 'linear') == 'sqrt' then f = f * f end
+    return f * g.dur
+end
+
+-- Pr 式时间码输入：纯数字时**从右往左**两位一组读 = [时][分][秒][帧]，帧数超过 fps 自动进位
+-- 2200 → 22 秒 0 帧；120000 → 12 分 0 秒 0 帧；2245 @30fps → 23 秒 15 帧
+-- 带分隔符的（00:00:22:00 / 22.5 / 1:02:03）仍走导入侧那套 parse_time，两边规则不互相污染。
+TL.parse_tc = function(str, fps)
+    local s = tostring(str or ''):gsub('%s', '')
+    if s == '' then return nil end
+    if s:match('^%d+$') then
+        local fi = tonumber(fps) or 25
+        if fi < 1 then fi = 1 end
+        local n = #s
+        local function part(from, len)                  -- 从右往左第 from 位起，取 len 位
+            local a = n - from - len + 1
+            if a < 1 then return 0 end
+            return tonumber(s:sub(a, a + len - 1)) or 0
+        end
+        local fr = part(0, 2)
+        local ss = part(2, 2)
+        local mm = part(4, 2)
+        local hh = part(6, n)
+        return hh * 3600 + mm * 60 + ss + fr / fi       -- fr/fi 自动进位（45 帧 @30 = 1.5 秒）
+    end
+    return parse_time(s, fps)
+end
+
+local function tl_grab_sections(on)
+    local w, h = osd_size()
+    if on then
+        mp.commandv('disable-section', TL_SEC)          -- 抓取期间点哪儿都是"放下"，不再走点击分派
+        mp.set_mouse_area(0, 0, w, h, TL_ANY)           -- 整个窗口都算"放下"（点别处也能退出）
+        mp.commandv('enable-section', TL_ANY)
+        mp.commandv('enable-section', TL_KEYSEC)
+    else
+        mp.set_mouse_area(0, 0, 0, 0, TL_ANY)
+        mp.commandv('disable-section', TL_ANY)
+        mp.commandv('disable-section', TL_KEYSEC)
+        mp.commandv('enable-section', TL_SEC)
+    end
+end
+
+TL.drop = function(why)                                  -- 放下：保留当前范围，只结束抓取
+    if not TL.grab then return end
+    TL.grab = nil
+    tl_grab_sections(false)
+    msg.verbose('时间轴·放下（' .. tostring(why or '点击') .. '）')
+    render_timeline()
+end
+
+TL.abort = function(why)                                 -- 放弃：回到抓起前的范围
+    if not TL.grab then return end
+    local gr = TL.grab
+    TL.grab = nil
+    tl_grab_sections(false)
+    tl_set_range(gr.t0, gr.t1, '放弃抓取（' .. tostring(why or 'ESC') .. '）')
+end
 
 local function tl_grab_start(g, mx)
     local kind = 'mid'
     if math.abs(mx - g.wx0) <= 12 then kind = 'left'
     elseif math.abs(mx - g.wx1) <= 12 then kind = 'right' end
-    TL.grab = { kind = kind, t0 = g.t0, t1 = g.t1 }
-    msg.verbose(string.format('时间轴·抓起 %s（%.3f ~ %.3f）：移动鼠标改范围，再点一下放下，ESC 放弃',
-        kind == 'left' and '左端' or (kind == 'right' and '右端' or '整段'), g.t0, g.t1))
+    TL.grab = { kind = kind, t0 = g.t0, t1 = g.t1, base = tl_ov_time(g, mx) }
+    tl_grab_sections(true)
+    msg.verbose(string.format('时间轴·抓起 %s（%.3f ~ %.3f，鼠标处 %.3f）：移动鼠标改范围，点任意处/按任意键放下，ESC 放弃',
+        kind == 'left' and '左端' or (kind == 'right' and '右端' or '整段'), g.t0, g.t1, TL.grab.base))
     render_timeline()
 end
 
 local function tl_grab_move(g, mx)
     local gr = TL.grab
     if not gr then return end
-    local tt = g.t0 + (mx - g.x0) / math.max(1, g.rw) * g.span     -- 鼠标所在位置对应的时间
+    local at = tl_ov_time(g, mx)
     local minspan = tl_min_span()
     local n0, n1 = gr.t0, gr.t1
     if gr.kind == 'left' then
-        n0 = math.max(0, math.min(tt, gr.t1 - minspan))            -- 左端跟鼠标，右端不动
+        n0 = math.max(0, math.min(at, gr.t1 - minspan))        -- 左圆跟鼠标，右端不动
         n1 = gr.t1
     elseif gr.kind == 'right' then
-        n1 = math.min(g.dur, math.max(tt, gr.t0 + minspan))        -- 右端跟鼠标，左端不动
+        n1 = math.min(g.dur, math.max(at, gr.t0 + minspan))    -- 右圆跟鼠标，左端不动
         n0 = gr.t0
     else
-        local d = tt - g.t0                                        -- 整段平移（不出片头片尾）
+        local d = at - gr.base                                 -- 整段平移：相对抓起那一刻的位移
         n0, n1 = gr.t0 + d, gr.t1 + d
         if n0 < 0 then n1, n0 = n1 - n0, 0 end
         if n1 > g.dur then n0, n1 = n0 - (n1 - g.dur), g.dur end
     end
-    local c0, c1 = TL.t0 or 0, TL.t1 or g.dur                      -- 没变就别重绘（鼠标一动会来很多次）
+    local c0, c1 = TL.t0 or 0, TL.t1 or g.dur                  -- 没变就别重绘（鼠标一动会来很多次）
     if math.abs(c0 - n0) < 1e-6 and math.abs(c1 - n1) < 1e-6 then return end
     tl_set_range(n0, n1, gr.kind == 'left' and '抓取左端' or (gr.kind == 'right' and '抓取右端' or '抓取平移'))
 end
@@ -2710,21 +2792,24 @@ mp.observe_property('mouse-pos', 'native', function(_, p)
 end)
 mp.add_key_binding('ESC', 'tl-grab-cancel', function()
     if TL.grab then
-        local gr = TL.grab
-        TL.grab = nil
-        tl_set_range(gr.t0, gr.t1, '放弃抓取')
+        TL.abort('ESC')
     else
         mp.commandv('set', 'fullscreen', 'no')      -- ESC 在 mpv 里的默认行为，别被我们吃掉
     end
 end)
+mp.add_key_binding(nil, 'tl-drop', function() TL.drop('点击/按键') end)
 -- 取证钩子：本机不能注入鼠标，用 tl-drag 直接喂一个 x 给抓取逻辑
 mp.register_script_message('tl-drag', function(x)
     if TL.grab and TL.geo then tl_grab_move(TL.geo, tonumber(x)) end
 end)
 
-local function tl_click(fx, fy)
+local function tl_click(fx, fy, forced_dbl)
     local g = TL.geo
     if not g then return end
+    if TL.grab then                     -- 抓手进行中点时间轴 = 放下（真机路径已被整窗区域接管，这里是兜底 + 测试钩子）
+        TL.drop('点击')
+        return
+    end
     local mx, my = fx, fy
     if not mx then
         local p = mp.get_property_native('mouse-pos')
@@ -2732,8 +2817,8 @@ local function tl_click(fx, fy)
         mx, my = p.x, p.y
     end
     local now = mp.get_time()
-    local dbl = (now - TL_LAST.t < 0.40) and math.abs(mx - TL_LAST.x) <= 14
-    TL_LAST.t, TL_LAST.x = now, mx
+    local dbl = forced_dbl or ((now - TL_LAST.t < 0.40) and math.abs(mx - TL_LAST.x) <= 14)
+    TL_LAST.t, TL_LAST.x = (dbl and -10 or now), mx     -- 真双击事件来了就把计时器清零，别触发两次
 
     local function seek_frame(tt, why)
         local fr = math.floor(tt * g.fps + 1e-6)         -- 与"吸帧"同一口径：跳到帧起点
@@ -2753,9 +2838,9 @@ local function tl_click(fx, fy)
             local def = to_timecode(side == 'left' and g.t0 or g.t1, g.fps)
             msg.verbose(string.format('时间轴·打开时间码输入框（%s端 %s）',
                 side == 'left' and '左' or '右', def))
-            ask_text('跳到时间码（hh:mm:ss:ff 或 hh:mm:ss.mmm）', def, function(str)
+            ask_text('跳到时间码（Pr 式：2200 = 22s0f；也认 00:00:22:00 / 22.5）', def, function(str)
                 if not str then return end                     -- ESC 关掉输入框 = 不改
-                local v = parse_time(str, g.fps)
+                local v = TL.parse_tc(str, g.fps)
                 if v == nil then notify('时间码看不懂：' .. str) return end
                 seek_frame(v, '输入' .. (side == 'left' and '左' or '右') .. '端时间码')
             end)
@@ -2783,8 +2868,35 @@ local function tl_click(fx, fy)
     end
 end
 
-mp.commandv('define-section', TL_SEC, 'mbtn_left script-binding ' .. BIND_PREFIX .. 'tl-click', 'force')
+-- mbtn_left_dbl 也绑进我们这块区域：mpv 默认"双击 = 切全屏"，不挡掉的话双击回整片会顺带切全屏（用户实测）
+mp.commandv('define-section', TL_SEC,
+    'mbtn_left script-binding ' .. BIND_PREFIX .. 'tl-click\n' ..
+    'mbtn_left_dbl script-binding ' .. BIND_PREFIX .. 'tl-dbl', 'force')
+-- 抓手期间的两个"逃生门"（只在抓取中 enable）
+mp.commandv('define-section', TL_ANY, 'mbtn_left script-binding ' .. BIND_PREFIX .. 'tl-drop', 'force')
+mp.commandv('define-section', TL_KEYSEC,
+    'SPACE script-binding ' .. BIND_PREFIX .. 'tl-drop\n' ..
+    'ENTER script-binding ' .. BIND_PREFIX .. 'tl-drop\n' ..
+    'LEFT script-binding ' .. BIND_PREFIX .. 'tl-drop\n' ..
+    'RIGHT script-binding ' .. BIND_PREFIX .. 'tl-drop\n' ..
+    'UP script-binding ' .. BIND_PREFIX .. 'tl-drop\n' ..
+    'DOWN script-binding ' .. BIND_PREFIX .. 'tl-drop\n' ..
+    'PGUP script-binding ' .. BIND_PREFIX .. 'tl-drop\n' ..
+    'PGDWN script-binding ' .. BIND_PREFIX .. 'tl-drop', 'force')
 mp.add_key_binding(nil, 'tl-click', tl_click)
+-- 双击：mpv 默认"双击 = 切全屏"，会跟"双击回整片"抢。绑到全局键上自己判断：
+-- 落在时间轴的刻度带上 = 回整片；其它地方（或时间轴没显示时）= 转发 mpv 的默认行为（两边都不丢）。
+mp.add_key_binding('MBTN_LEFT_DBL', 'tl-dbl', function()
+    local g = TL.geo
+    local p = mp.get_property_native('mouse-pos')
+    local on_tl = false
+    if (UI.bar and UI.style == 'prbar' and o.tl) and g and p and p.x then
+        on_tl = (p.x >= g.x0 - 2 and p.x <= g.x1 + 4 and p.y >= g.y_lab - 2 and p.y <= g.rl_y + 1)
+    end
+    log('时间轴·双击 → %s', on_tl and '回整片' or '转发全屏（mpv 默认）')
+    if TL.grab then TL.drop('双击') end
+    if on_tl then tl_reset('双击刻度带') else mp.commandv('cycle', 'fullscreen') end
+end)
 -- 自动化取证钩子：tl-hit 用给定坐标走一遍点击（本机不能注入鼠标）；tl-goto 直接按时间码跳
 mp.register_script_message('tl-hit', function(x, y)
     tl_click(tonumber(x), tonumber(y))
@@ -2792,7 +2904,7 @@ end)
 mp.register_script_message('tl-goto', function(str)
     local g = TL.geo
     if not g then return end
-    local v = parse_time(str, g.fps)
+    local v = TL.parse_tc(str, g.fps)
     if v == nil then msg.verbose('时间轴·时间码看不懂：' .. tostring(str)) return end
     local fr = math.floor(v * g.fps + 1e-6)
     mp.set_property_number('time-pos', fr / g.fps)
@@ -3483,7 +3595,14 @@ for _, a in ipairs(ACTIONS) do
     a.bind_key = bind_key
     a.key = bind_key or '（已禁用）'
     local ok, err = true, nil
-    if bind_key then ok, err = pcall(mp.add_key_binding, bind_key, a.name, fn or function() end) end
+    -- 第 9 条 r46：抓手进行中，任何插件动作键也顺手把抓手放下（"任何按键都能中断"，且不丢这个键原本的功能）
+    if bind_key then
+        local f0 = fn or function() end
+        ok, err = pcall(mp.add_key_binding, bind_key, a.name, function()
+            if TL.drop then TL.drop('按键') end
+            f0()
+        end)
+    end
     if not ok then msg.warn(string.format('绑定 %s 失败: %s', tostring(a.key), tostring(err))) end
 end
 
