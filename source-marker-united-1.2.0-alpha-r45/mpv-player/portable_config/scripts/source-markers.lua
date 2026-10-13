@@ -79,6 +79,9 @@ local o = {
     bar_scale = 1.0,           -- 第 8 条：Pr 风格控制栏的额外缩放（1.0 = 只随窗口自适应）
     bar_tooltip = false,       -- 第 8 条：鼠标悬停时在按钮上方显示按钮名（默认关）
     tl = true,                 -- 第 9 条：Pr 风格下是否显示那条可缩放时间轴（默认开）
+    tl_scale = 2.0,            -- 第 9 条：时间轴自己的缩放因子（Pr 里时间轴高度 ≈ 控制栏的 2~3 倍）
+    tl_labels = true,          -- 第 9 条：刻度上是否显示时间戳（Pr 没有；默认开）
+    tl_ov_map = 'linear',      -- 第 9 条：概览条映射 linear（所见即真实比例）| sqrt（Pr 那种压缩，默认不用）
 }
 opts.read_options(o, 'source-markers')
 
@@ -2221,12 +2224,12 @@ end
 local function tl_metrics()
     local w, h = osd_size()
     local bm = prbar_metrics()                    -- 与控制栏同一套缩放；位置贴着控制栏正上方
-    local s = bm.scale
+    local s = bm.scale * (tonumber(o.tl_scale) or 1.0)   -- 时间轴自己的缩放因子（与控制栏解耦，用户可自己找比例）
     -- 比例尺要大一些（原来 62% 显得比下面控制栏"内容多、格子挤"）
     local width = math.min(math.floor(w * 0.84), w - 60)
     if width < 280 then width = math.max(200, w - 40) end
     -- 每行高度只在这里算一次；render_timeline 按同一套数字排位置，总高也由它们累加，
-    -- 这样"最底下那条横线"永远真的落在块底部（用户第 ⑤ 条：箭头和竖条都要落在它上面）
+    -- 这样"最底下那条横线"永远真的落在它该在的地方（刻度基线 / 概览条在最底部）
     local pad     = math.max(5, math.floor(6 * s + 0.5))
     local tc_sz   = math.max(10, math.floor(11 * s + 0.5))
     local ov_h    = math.max(6, math.floor(7 * s + 0.5))
@@ -2235,13 +2238,14 @@ local function tl_metrics()
     local tick_h  = math.max(3, math.floor(5 * s + 0.5))
     local tick_h2 = math.max(6, math.floor(8 * s + 0.5))
     local gap     = math.max(1, math.floor(2 * s + 0.5))
-    local height  = pad + tc_sz + gap + ov_h + gap + lab_sz + gap + mh + tick_h2 + pad
+    local height  = pad + tc_sz + gap + lab_sz + gap + mh + tick_h2 + gap + ov_h + pad
     local x = math.max(8, math.floor((w - width) / 2))
     local y = math.max(8, bm.y - height - math.floor(6 * s + 0.5))
     return { w = w, h = h, scale = s, x = x, y = y, width = width, height = height,
              pad = pad, tc_sz = tc_sz, ov_h = ov_h, lab_sz = lab_sz, mh = mh,
              tick_h = tick_h, tick_h2 = tick_h2, gap = gap,
-             mw = math.max(5, math.floor(6 * s + 0.5)) }
+             mw = math.max(5, math.floor(6 * s + 0.5)),                     -- 播放头头型宽
+             mw_mk = math.max(4, math.floor(5 * s + 0.5)) }                 -- 标记头型宽（Pr 里标记比播放头瘦一点）
 end
 
 local function render_timeline()
@@ -2261,19 +2265,26 @@ local function render_timeline()
     local lines = { round_rect_line(m.x, m.y, m.width, m.height, math.floor(8 * s + 0.5), '&H1E1E1E&', '18') }
 
     -- 行位置全部由 tl_metrics 的同一套高度推出来（那里算总高，这里排位置，不许各写一份）
-    -- 从上往下：两端时间码 → 概览 ⚪==⚪ → 刻度标签（单独一行，不再和标记打架）→ 标记 ▼ 与刻度尺
+    -- 从上往下：两端时间码 → 刻度标签 → 标记头型 → 刻度尺（基线）→ 概览 ⚪==⚪（Pr 的位置：块的最底部）
     local tc_sz, ov_h, lab_sz = m.tc_sz, m.ov_h, m.lab_sz
-    local mh, tick_h, tick_h2, gap, mw = m.mh, m.tick_h, m.tick_h2, m.gap, m.mw
+    local mh, tick_h, tick_h2, gap = m.mh, m.tick_h, m.tick_h2, m.gap
+    local mw, mw_mk = m.mw, m.mw_mk
     local cy = m.y + pad
     local row_tc = cy
     cy = cy + tc_sz + gap
-    local row_ov = cy
-    cy = cy + ov_h + gap
     local row_lab = cy
     cy = cy + lab_sz + gap
     local row_mk = cy
-    local rl_y = m.y + m.height - pad - 1     -- 基线 = 整块最底下那条横线（第 ⑤ 条）
-    local ph = mh + tick_h2                   -- 播放头 ▼ 高度：顶到标记那一行，尖端正好落在基线上
+    local rl_y = row_mk + mh + tick_h2 - 1     -- 刻度基线：竖条、头型尖端、刻度都落在它上面
+    local row_ov = rl_y + 1 + gap              -- 概览条在基线**下面**（Pr 是这么放的）
+    local ph = mh + tick_h2                    -- 播放头头型高度：顶到标记那一行，尖端正好落在基线上
+
+    -- Pr 的"盾形"头型（上宽下窄、尖端在底部中间）；(x,y) = 左上角
+    local function shield_pts(h, wd)
+        local yv = math.floor(0.62 * h * 20 / wd + 0.5)
+        local yt = math.floor(h * 20 / wd + 0.5)
+        return { 0, 0, 20, 0, 20, yv, 10, yt, 0, yv }
+    end
 
     local function t2x(t)
         local x = x0 + (t - t0) / span * rw
@@ -2289,10 +2300,18 @@ local function render_timeline()
     lines[#lines + 1] = text_line(x0, row_tc, tc_sz, '&HB8C4D0&', ltxt)
     lines[#lines + 1] = text_line(x1 - math.floor(visual_width(rtxt) * tc_sz * 0.55), row_tc, tc_sz, '&HB8C4D0&', rtxt)
 
-    -- ② 概览 ⚪==⚪：整片一条细线，亮的一段 = 当前可见范围，两端各一个圆
+    -- ② 概览 ⚪==⚪（在刻度基线**下面**）：深色轨道 = 整片可滑动范围，亮段 = 当前可见范围，两端各一个圆
+    --    tl_ov_map=sqrt 用 Pr 那种压缩映射（亮段比真实比例长 = 极小区间也抓得住，代价是"看到的长度"不真实）
     local ov_mid = row_ov + math.floor(ov_h / 2)
-    lines[#lines + 1] = rect_line(x0, ov_mid - 1, rw, 2, '&H4A4A4A&', '10')
-    local wx0, wx1 = ov2x(t0), ov2x(t1)
+    local ov_track_h = math.max(3, math.floor(4 * s + 0.5))
+    lines[#lines + 1] = rect_line(x0, ov_mid - math.floor(ov_track_h / 2), rw, ov_track_h, '&H141414&', '00')
+    local function ov_frac(f)
+        f = math.max(0, math.min(1, f))
+        if (o.tl_ov_map or 'linear') == 'sqrt' then return math.sqrt(f) end
+        return f
+    end
+    local wx0 = x0 + ov_frac(t0 / dur) * rw
+    local wx1 = x0 + ov_frac(t1 / dur) * rw
     lines[#lines + 1] = rect_line(math.floor(wx0), ov_mid - 1, math.max(1, math.floor(wx1 - wx0)), 2, '&HD0D0D0&', '0')
     local cr = math.max(3, math.floor(3.6 * s + 0.5))
     for _, cx in ipairs({ math.floor(wx0), math.floor(wx1) }) do
@@ -2301,51 +2320,92 @@ local function render_timeline()
         lines[#lines + 1] = poly_line(cx - cr, ov_mid - cr, cr / 10, '&HE8E8E8&', '00', circle_pts(10, 10, 10))
     end
 
-    -- ③ 刻度尺：按可见跨度自动选步长（至少每 6px 一格；标签约每 72px 一个）
-    lines[#lines + 1] = rect_line(x0, rl_y, rw, 1, '&H5A5A5A&', '0')
-    local steps = { 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600 }
-    local step = steps[#steps]
-    for _, v in ipairs(steps) do
-        if span / v <= rw / 6 then step = v; break end
+    -- ⑥a 播放头竖条：**先画**，下面的刻度会盖在它上面（Pr 的行为：刻度在播放头上层）
+    local t = head_time()
+    local PL = '&HFFA64D&'
+    local cx_pl
+    if t and t >= t0 and t <= t1 then
+        cx_pl = math.floor(t2x(t)) + 0.5      -- 1px 竖线画在 [cx,cx+1)，中心是 cx+0.5
+        lines[#lines + 1] = rect_line(math.floor(cx_pl), row_lab, 1, rl_y - row_lab + 1, PL, '30')
     end
-    local px_per_tick = step / span * rw
-    -- 刻度标签用**短格式**（MM:SS / H:MM:SS；步长小于 1 秒时带一位小数）。
-    -- 用完整时间码时标签本身就有 ~90px 宽，会糊成一片（第一版就是这样，出图才发现）。
-    local function tl_label(tt, st)
+
+    -- ③ 刻度尺：步长只走"典型值"（半固定 —— 缩放时换档，格子形态不变）
+    --   1s 以上：时钟值（1/2/5/10/15/30 秒 → 分 → 1 小时封顶），每条大刻度**恒定 5 段**（4 条小刻度）
+    --   1s 以下：回到帧，大刻度 = fps 的整数因子且 ≥2 帧，小刻度份数取能整除的 {5,4,3,2}
+    lines[#lines + 1] = rect_line(x0, rl_y, rw, 1, '&H5A5A5A&', '0')
+    local fps_i = math.max(1, math.floor(fps + 0.5))
+    local function minor_parts(frames)
+        for _, k in ipairs({ 5, 4, 3, 2 }) do
+            if frames % k == 0 and frames / k >= 1 then return k end
+        end
+        return 0
+    end
+    local ladder = {}                       -- {步长(秒), 小刻度份数}，**按步长从小到大**排（选档依赖这个顺序）
+    for f = 2, fps_i do
+        if fps_i % f == 0 then ladder[#ladder + 1] = { f / fps, minor_parts(f) } end
+    end
+    for _, v in ipairs({ 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600 }) do
+        ladder[#ladder + 1] = { v, 5 }
+    end
+    -- 一屏大刻度控制在 4~8 条：**从大往小**找第一个"间距 ≤ 上限"的档（上限同时保证标签放得下、不糊在一起）
+    local sample_w = math.floor(visual_width('00:00') * lab_sz * 0.55)
+    local hi_px = math.max(sample_w + math.floor(10 * s + 0.5), math.floor(rw / 4 + 0.5))
+    local step, parts = ladder[1][1], ladder[1][2]      -- 兜底 = 最细的一档（放到一帧一格时不会再粗）
+    for k = #ladder, 1, -1 do
+        local e = ladder[k]
+        if e[1] / span * rw <= hi_px + 0.5 then step, parts = e[1], e[2]; break end
+    end
+    -- 标签：1s 以上 MM:SS / H:MM:SS；1s 以下 SS:FF（可见范围跨分钟时 MM:SS:FF，跟 Pr 的帧号习惯一致）
+    -- 1s 以下按**步长序号**算"名义帧"：fps 常带尾巴（这份素材是 30.0005），用 t*fps 会把 6.000s
+    -- 那一格标成上一帧（05:28 而不是 06:00）。
+    local cross_min = math.floor(t0 / 60) ~= math.floor(t1 / 60)
+    local function tl_label(idx, tt, st)
+        if st < 1 then
+            local fi = math.floor(idx * step * fps + 0.5)
+            local sec, ff = math.floor(fi / fps_i), fi % fps_i
+            if cross_min then return string.format('%02d:%02d:%02d', math.floor(sec / 60), sec % 60, ff) end
+            return string.format('%02d:%02d', sec % 60, ff)
+        end
         local sec = math.floor(tt + 1e-6)
         local hh = math.floor(sec / 3600)
         local mm = math.floor(sec % 3600 / 60)
-        local ss = sec % 60
-        if st < 1 then
-            return string.format('%02d:%02d.%d', mm, ss, math.floor((tt - sec) * 10 + 0.5) % 10)
-        end
-        if hh > 0 then return string.format('%d:%02d:%02d', hh, mm, ss) end
-        return string.format('%02d:%02d', mm, ss)
+        if hh > 0 then return string.format('%d:%02d:%02d', hh, mm, sec % 60) end
+        return string.format('%02d:%02d', mm, sec % 60)
     end
-    local lab_sample = tl_label(math.ceil(t0 / step) * step, step)
-    local lab_w = math.floor(visual_width(lab_sample) * lab_sz * 0.55)
-    local lab_px = lab_w + 14
-    local label_every = math.max(1, math.ceil(lab_px / math.max(1, px_per_tick)))
-    local i, t = 0, math.ceil(t0 / step) * step
+    -- 起点对齐到步长整数倍；减 0.01 步是给 fps 尾巴（29.97/30.0005）留的浮点余量 ——
+    -- 否则 6.000s 这种"正好在格子上"的点会被算成 90.0014 步、ceiling 成下一格，整条刻度相位偏一帧。
+    local t_cur = math.ceil(t0 / step - 0.01) * step
+    local i_cur = math.floor(t_cur / step + 0.5)          -- 步长序号（= t_cur / step 的整数倍）
+    local lab_w = math.floor(visual_width(tl_label(i_cur, t_cur, step)) * lab_sz * 0.55)
     local prev_lab = -9999
-    while t <= t1 + 1e-9 do
-        local x = math.floor(t2x(t))
-        local big = (i % label_every == 0)
-        local hh = big and tick_h2 or tick_h
-        lines[#lines + 1] = rect_line(x, rl_y - hh, 1, hh, '&H6E6E6E&', '0')
-        if big then
-            -- 标签自己占一行（在标记之上）；最右端会被夹回框内（用户第 ③ 条：竖屏更常见）
+    local first_lab = ''                                  -- 第一个真画出去的标签（只进日志，用来核对步长/格式）
+    while t_cur <= t1 + 1e-9 do
+        -- 大刻度永远落在步长的整数倍上（5s 档就是 5s/10s/15s…，不随可见区间漂移）
+        local x = math.floor(t2x(t_cur))
+        lines[#lines + 1] = rect_line(x, rl_y - tick_h2, 1, tick_h2, '&H6E6E6E&', '0')
+        if o.tl_labels then
+            -- 标签独占一行；最右端会被夹回框内，压到前一个就干脆不画（宁可少一个数字，不要糊成一片）
+            local txt = tl_label(i_cur, t_cur, step)
             local lx = math.min(x + 3, x1 - lab_w)
             if lx >= x0 and lx >= prev_lab + lab_w + math.floor(6 * s + 0.5) then
                 prev_lab = lx
-                lines[#lines + 1] = text_line(lx, row_lab, lab_sz, '&H7A8A9A&', tl_label(t, step))
+                if first_lab == '' then first_lab = txt end
+                lines[#lines + 1] = text_line(lx, row_lab, lab_sz, '&H7A8A9A&', txt)
             end
         end
-        t = t + step
-        i = i + 1
+        if parts and parts >= 2 then
+            for k = 1, parts - 1 do
+                local tx = math.floor(t2x(t_cur + step * k / parts))
+                if tx > x0 and tx < x1 then
+                    lines[#lines + 1] = rect_line(tx, rl_y - tick_h, 1, tick_h, '&H5A5A5A&', '0')
+                end
+            end
+        end
+        t_cur = t_cur + step
+        i_cur = i_cur + 1
     end
 
-    -- ④ 标记 ▼（彩色；同一个像素位置只画一个 —— 密集时否则糊成实心带）
+    -- ④ 标记（彩色盾形头，比播放头**瘦**一点 —— Pr 里两者接近，标记窄一些；同一像素只画一个）
     local last_x = -999
     for _, mk in ipairs(S.markers) do
         if mk.t >= t0 and mk.t <= t1 then
@@ -2353,10 +2413,10 @@ local function render_timeline()
             if x - last_x >= 2 then
                 last_x = x
                 local c = ass_color(mk.color or 0)
-                -- 中心线取 +0.5：1px 的竖线画在 [cx,cx+1)，中心是 cx+0.5，箭头按同一条中心对称
+                -- 中心线取 +0.5：1px 的竖线画在 [cx,cx+1)，中心是 cx+0.5，头型按同一条中心对称
                 local cx = math.floor(x) + 0.5
-                lines[#lines + 1] = poly_line(cx - mw / 2, rl_y - tick_h2 - mh, mw / 20, c, '00',
-                    { 0, 0, 20, 0, 10, mh * 20 / mw })
+                lines[#lines + 1] = poly_line(cx - mw_mk / 2, rl_y - tick_h2 - mh, mw_mk / 20, c, '00',
+                    shield_pts(mh, mw_mk))
                 lines[#lines + 1] = rect_line(math.floor(cx), rl_y - tick_h2, 1, tick_h2, c, '70')
             end
         end
@@ -2387,16 +2447,19 @@ local function render_timeline()
         end
     end
 
-    -- ⑥ 播放头：在范围内 = 竖线 + 顶部 ▼；在范围外 = 对应边缘画方向小箭头（用户定的）
-    local t = head_time()
+    -- ⑥ 播放头头型：Pr 的"盾形"（尖端落在基线上）；放大到一帧 ≥6px 时，把"当前显示帧"那一格
+    --    画成蓝色扁条 —— Pr 用它提示"监视器上现在显示的是哪一帧"（扁条在哪边就说明头偏在哪边）。
+    --    在范围外 = 对应边缘画方向小箭头（用户定的）。
     if t then
-        local PL = '&HFFA64D&'
         if t >= t0 and t <= t1 then
-            -- 竖条与箭头共用同一条中心线 cx（用户第 ④ 条：原先差几个像素）；箭头更高、尖端落在基线上（第 ⑤ 条）
-            local cx = math.floor(t2x(t)) + 0.5
-            lines[#lines + 1] = rect_line(math.floor(cx), row_lab, 1, rl_y - row_lab + 1, PL, '30')
-            lines[#lines + 1] = poly_line(cx - mw / 2, rl_y - ph, mw / 20, PL, '00',
-                { 0, 0, 20, 0, 10, ph * 20 / mw })
+            local fi = math.floor(t * fps + 1e-6)          -- 监视器显示的正是这一帧
+            local wf = (1 / fps) / span * rw
+            if wf >= 6 then
+                local bh = math.max(2, math.floor(tick_h2 / 2))
+                lines[#lines + 1] = rect_line(math.floor(t2x(fi / fps)), rl_y - bh,
+                    math.max(2, math.floor(wf)), bh + 1, PL, '00')
+            end
+            lines[#lines + 1] = poly_line(cx_pl - mw / 2, rl_y - ph, mw / 20, PL, '00', shield_pts(ph, mw))
         elseif t < t0 then
             lines[#lines + 1] = poly_line(x0 + 2, rl_y - ph, ph / 20, PL, '20',
                 { 20, 0, 0, 10, 20, 20 })
@@ -2408,8 +2471,9 @@ local function render_timeline()
 
     set_overlay(overlay_tl, lines, m.w, m.h)
     -- 中间量打进日志（位置类问题只能靠它精确定位，别靠肉眼数像素）
-    msg.verbose(string.format('时间轴：范围 %.3f~%.3f ｜ 画布 x %d..%d ｜ 行数 %d ｜ 入=%s 出=%s ｜ 播放头=%s',
+    msg.verbose(string.format('时间轴：范围 %.3f~%.3f ｜ 画布 x %d..%d ｜ 行数 %d ｜ 大刻度 %.4fs×%d段 ｜ 标签%s 首标=%s ｜ 入=%s 出=%s ｜ 播放头=%s',
         t0, t1, x0, x1, #lines,
+        step, parts or 0, o.tl_labels and 'on' or 'off', first_lab ~= '' and first_lab or '（无）',
         xi_x and string.format('%.0f', xi_x) or '无', xo_x and string.format('%.0f', xo_x) or '无',
         t and string.format('%.3f', t) or '无'))
 end
