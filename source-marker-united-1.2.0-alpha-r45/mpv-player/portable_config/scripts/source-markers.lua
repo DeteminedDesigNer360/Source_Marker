@@ -2608,28 +2608,33 @@ local function tl_zoom(factor, why)
     local dur = mp.get_property_number('duration')
     if not t0c or not dur then return end
     local span = t1c - t0c
+    local minspan = tl_min_span()
+    -- 已经顶在最小跨度上再放大 = 什么都不做。否则会出现"跨度缩不动、整段却在漂"的不对称
+    -- （用户实测：在 00:00 按 = 到最小再按 - 时区间整体向右漂，根因之一就在这里）。
+    if factor > 1 and span <= minspan + 1e-9 then
+        msg.verbose(string.format('时间轴·已在最小跨度 %.3f s，再放大无效', span))
+        return
+    end
     local anchor = mp.get_property_number('time-pos')
     if not anchor then anchor = (t0c + t1c) / 2 end
     if anchor < t0c then anchor = t0c end              -- 播放头在范围外 ⇒ 以最近的边为轴
     if anchor > t1c then anchor = t1c end
     local p = (anchor - t0c) / span
-    -- 缩放锚点（用户 2026-10-13 复验后的结论）：
-    --   head（默认）= 死钉在播放头上 —— 就是你验过的那一版，回档到这个；
-    --   center      = 钉在区间中心（"与播放头无关"的另一种理解）；
-    --   pr          = 每档把播放头拉向区间中心（我照 Pr 猜的，你说手感诡异 ⇒ 留成 opt-in，不再默认开）。
+    -- 锚点模式：head = 死钉播放头；center = 钉区间中心；pr = 每档把播放头往中心拉（Pr 实测：偏移 ×2/3）
     local anchor_mode = o.tl_zoom_anchor or 'head'
     if anchor_mode == 'center' then
         anchor = (t0c + t1c) / 2
         p = 0.5
     elseif anchor_mode == 'pr' then
-        local pull = tonumber(o.tl_zoom_pull) or 4
+        local pull = tonumber(o.tl_zoom_pull) or 0.585
         if pull > 0 then
             p = 0.5 + (p - 0.5) * (1 / factor) ^ pull
             msg.verbose(string.format('时间轴·缩放锚点 p → %.3f（pr，拉力 %s）', p, tostring(pull)))
         end
     end
+    -- 播放头不许被甩到区间外：一旦跑出去，下一轮"以最近的边为轴"会把区间一点点推走（越漂越远）。夹回 [0,1]。
+    if p < 0 then p = 0 elseif p > 1 then p = 1 end
     local newspan = span / factor
-    local minspan = tl_min_span()
     if newspan < minspan then newspan = minspan end
     if newspan > dur then newspan = dur end
     local n0 = anchor - p * newspan
@@ -2658,8 +2663,8 @@ end
 
 -- 动作名 → 行为：既给键位表用，也直接作为"脚本绑定"暴露（input.conf / script-binding 都能调）
 local TL_ACTIONS = {
-    ['tl-zoom-in']   = function() tl_zoom(TL_STEP.key or 2.0, '键位 ×2') end,
-    ['tl-zoom-out']  = function() tl_zoom(1 / (TL_STEP.key or 2.0), '键位 ×2') end,
+    ['tl-zoom-in']   = function() tl_zoom(TL_STEP.key or 2.0, '键位') end,
+    ['tl-zoom-out']  = function() tl_zoom(1 / (TL_STEP.key or 2.0), '键位') end,
     ['tl-pan-left']  = function() tl_pan(-TL_PAN.plain, '左移') end,
     ['tl-pan-right'] = function() tl_pan(TL_PAN.plain, '右移') end,
     ['tl-reset']     = function() tl_reset('整片') end,
