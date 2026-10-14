@@ -82,10 +82,12 @@ local o = {
     tl_scale = 2.0,            -- 第 9 条：时间轴自己的缩放因子（Pr 里时间轴高度 ≈ 控制栏的 2~3 倍）
     tl_min_frames = 15,        -- 第 9 条：时间轴最小跨度（帧）——滚轮最多放大到这么多帧
     tl_zoom_steps = '1.003,1.001,1.01',  -- 第 9 条：滚轮缩放步长（普通,Ctrl细,Shift粗）——用户实测手感值
-    tl_zoom_anchor = 'head',   -- 第 9 条：缩放锚点 head = 死钉在播放头（默认，你验过的那版）| center = 钉在区间中心（与播放头无关）| pr = 每档把播放头拉向中心（实验，手感诡异 ⇒ 改成 opt-in）
-    tl_zoom_pull = 4,          -- 第 9 条：pr 模式的拉力：每档把"离中心的相对偏移"乘以 (1/倍率)^拉力
+    tl_zoom_anchor = 'pr',     -- 第 9 条：缩放锚点 pr = 每档把播放头往区间中心拉（Pr 实测手感，默认）| head = 死钉播放头 | center = 钉区间中心
+    tl_zoom_pull = 0.585,      -- 第 9 条：pr 的拉力 —— Pr 实测"每 ×2 一步把离中心的偏移乘 2/3"，即 pull = -log2(2/3)
+    tl_key_step = 2.0,         -- 第 9 条：Alt+= / Alt+- 的步长（Pr 的 = 实测就是 ×2）
     tl_labels = true,          -- 第 9 条：刻度上是否显示时间戳（Pr 没有；默认开）
-    tl_ov_map = 'linear',      -- 第 9 条：概览条映射 linear（所见即真实比例）| sqrt（Pr 那种压缩，默认不用）
+    tl_ov_map = 'pow',         -- 第 9 条：概览条映射 linear | sqrt | pow（Pr 实测是幂律，见 tl_ov_pow）
+    tl_ov_pow = 1.29,          -- 第 9 条：pow 的指数 —— Pr 实测"亮段宽 ∝ 区间^1.29"（每按一次 = 亮段 ×0.408）
 }
 opts.read_options(o, 'source-markers')
 
@@ -2346,7 +2348,9 @@ local function render_timeline()
     lines[#lines + 1] = rect_line(x0, ov_mid - math.floor(ov_track_h / 2), rw, ov_track_h, '&H141414&', '00')
     local function ov_frac(f)
         f = math.max(0, math.min(1, f))
-        if (o.tl_ov_map or 'linear') == 'sqrt' then return math.sqrt(f) end
+        local mode = o.tl_ov_map or 'linear'
+        if mode == 'sqrt' then return math.sqrt(f) end
+        if mode == 'pow' then return f ^ (tonumber(o.tl_ov_pow) or 1.29) end   -- Pr 实测：亮段宽 ∝ 区间^1.29
         return f
     end
     local wx0 = x0 + ov_frac(t0 / dur) * rw
@@ -2553,13 +2557,14 @@ end
 local function tl_init()      -- 整块塞进一个函数：Lua 5.1 主块最多 200 个 local，这个文件已经很挤
 -- 步长（用户实测反馈：原来 ×1.5/×1.12/×2.5 整体偏粗，Ctrl 的手感已经像 Pr 的 Shift ⇒ 全部调细）；
 -- 可用 tl_zoom_steps = '普通,细,粗' 自己调（重启生效）
-local TL_STEP = { plain = 1.10, ctrl = 1.03, shift = 1.35 }
+local TL_STEP = { plain = 1.10, ctrl = 1.03, shift = 1.35, key = 2.0 }
 local TL_PAN  = { plain = 0.10, shift = 0.25 }
 do
     local a, b, c = tostring(o.tl_zoom_steps or ''):match('([%d%.]+)%s*,%s*([%d%.]+)%s*,%s*([%d%.]+)')
     if tonumber(a) and tonumber(b) and tonumber(c) then
         TL_STEP.plain, TL_STEP.ctrl, TL_STEP.shift = tonumber(a), tonumber(b), tonumber(c)
     end
+    TL_STEP.key = tonumber(o.tl_key_step) or 2.0
 end
 
 local function tl_min_span()
@@ -2653,8 +2658,8 @@ end
 
 -- 动作名 → 行为：既给键位表用，也直接作为"脚本绑定"暴露（input.conf / script-binding 都能调）
 local TL_ACTIONS = {
-    ['tl-zoom-in']   = function() tl_zoom(TL_STEP.plain, '放大') end,
-    ['tl-zoom-out']  = function() tl_zoom(1 / TL_STEP.plain, '缩小') end,
+    ['tl-zoom-in']   = function() tl_zoom(TL_STEP.key or 2.0, '键位 ×2') end,
+    ['tl-zoom-out']  = function() tl_zoom(1 / (TL_STEP.key or 2.0), '键位 ×2') end,
     ['tl-pan-left']  = function() tl_pan(-TL_PAN.plain, '左移') end,
     ['tl-pan-right'] = function() tl_pan(TL_PAN.plain, '右移') end,
     ['tl-reset']     = function() tl_reset('整片') end,
@@ -2711,7 +2716,12 @@ TL.grab = nil
 local function tl_ov_time(g, mx)
     local f = (mx - g.x0) / math.max(1, g.rw)
     if f < 0 then f = 0 elseif f > 1 then f = 1 end
-    if (o.tl_ov_map or 'linear') == 'sqrt' then f = f * f end
+    if (o.tl_ov_map or 'linear') == 'sqrt' then
+        f = f * f
+    else
+        local mode = o.tl_ov_map or 'linear'
+        if mode == 'pow' then f = f ^ (1 / (tonumber(o.tl_ov_pow) or 1.29)) end
+    end
     return f * g.dur
 end
 
@@ -2939,9 +2949,11 @@ mp.register_script_message('tl-anchor', function(mode, pull)
     if tonumber(pull) then o.tl_zoom_pull = tonumber(pull) end
     log('时间轴·缩放锚点 → %s（拉力 %s）', tostring(o.tl_zoom_anchor), tostring(o.tl_zoom_pull))
 end)
-mp.register_script_message('tl-ov', function(mode)
-    o.tl_ov_map = (tostring(mode) == 'sqrt') and 'sqrt' or 'linear'
-    log('时间轴·概览映射 → %s', tostring(o.tl_ov_map))
+mp.register_script_message('tl-ov', function(mode, p)
+    local m = tostring(mode)
+    if m == 'linear' or m == 'sqrt' or m == 'pow' then o.tl_ov_map = m end
+    if tonumber(p) then o.tl_ov_pow = tonumber(p) end
+    log('时间轴·概览映射 → %s（pow 指数 %s）', tostring(o.tl_ov_map), tostring(o.tl_ov_pow))
     render_timeline()
 end)
 
@@ -4038,6 +4050,7 @@ mp.register_script_message('state', function()
         tl_t0 = TL.t0, tl_t1 = TL.t1, tl_file = TL.cur_file,
         tl_min_frames = tonumber(o.tl_min_frames) or 15,
         tl_zoom_anchor = o.tl_zoom_anchor, tl_zoom_pull = o.tl_zoom_pull,
+        tl_ov_map = o.tl_ov_map, tl_ov_pow = o.tl_ov_pow,
         tl_zoom_steps = TL.STEP and string.format('%s,%s,%s', tostring(TL.STEP.plain),
             tostring(TL.STEP.ctrl), tostring(TL.STEP.shift)) or nil,
     }))
