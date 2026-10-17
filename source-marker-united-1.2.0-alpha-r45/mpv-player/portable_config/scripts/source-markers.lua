@@ -88,7 +88,7 @@ local o = {
     tl_labels = true,          -- 第 9 条：刻度上是否显示时间戳（Pr 没有；默认开）
     tl_ov_map = 'bar',         -- 第 9 条：概览条映射 linear | sqrt | pow | bar（bar = Pr 实测形态，默认）
     tl_ov_pow = 1.30,          -- 第 9 条：亮段宽 = u^pow —— 三轮实测 1.29~1.31，取 1.30
-    tl_ov_k = 1.188,           -- 第 9 条：bar 模式中心斜率 —— Pr NS3b 五点拟合 1.1886
+    tl_ov_k = 1.19,            -- 第 9 条：bar 模式中心斜率（u=1/2 处）—— NS4 两轮拟合，深层按 u^0.68 衰减
 }
 opts.read_options(o, 'source-markers')
 
@@ -2542,13 +2542,14 @@ local function render_timeline()
         })
     end
     -- 中间量打进日志（位置类问题只能靠它精确定位，别靠肉眼数像素）
-    msg.verbose(string.format('时间轴：范围 %.3f~%.3f ｜ 画布 x %d..%d ｜ 行数 %d ｜ 大刻度 %.4fs×%d段 ｜ 标签%s 首标=%s ｜ 入=%s 出=%s ｜ 播放头=%s ｜ 几何 tc=%d,%d 标签行=%d 基线=%d 概览=%d 概览x=%d,%d 码宽=%d/%d',
+    msg.verbose(string.format('时间轴：范围 %.3f~%.3f ｜ 画布 x %d..%d ｜ 行数 %d ｜ 大刻度 %.4fs×%d段 ｜ 标签%s 首标=%s ｜ 入=%s 出=%s ｜ 播放头=%s ｜ 几何 tc=%d,%d 标签行=%d 基线=%d 概览=%d 概览x=%d,%d 码宽=%d/%d 概览k=%.4f',
         t0, t1, x0, x1, #lines,
         step, parts or 0, o.tl_labels and 'on' or 'off', first_lab ~= '' and first_lab or '（无）',
         xi_x and string.format('%.0f', xi_x) or '无', xo_x and string.format('%.0f', xo_x) or '无',
         t and string.format('%.3f 吸帧=%s 帧宽=%.1fpx 头x=%.0f', t, fi and tostring(fi) or '关',
             frame_px, cx_pl or -1) or '无',
-        row_tc, tc_sz, row_lab, rl_y, row_ov, wx0, wx1, wl, wr))
+        row_tc, tc_sz, row_lab, rl_y, row_ov, wx0, wx1, wl, wr,
+        (o.tl_ov_map == 'bar' and TL.bar_k) and TL.bar_k(math.max(0, math.min(1, span / math.max(1e-6, dur)))) or 1))
 end
 
 ----------------------------------------------------------------------
@@ -2746,12 +2747,20 @@ end
 --   宽 w = u^pow（只由区间大小决定）；中心 xc = 0.5 + (c-0.5)*k（线性、斜率 k>1）
 --   left = xc - w/2, right = xc + w/2，再夹到 [0,1]（贴边时 Pr 也是夹住不是压缩）
 --   实测：u=1/2 时宽占比 0.4057、k=1.1886；五个位置预测误差 < 1.6 px
+-- k 不是常数：NS4 A/B 两轮实测 u=1/2→1.19、1/4→1.1186、1/8→1.074、1/16→1.046，
+-- 即 k(u) = 1 + (k05-1)*(u/0.5)^0.68 —— 缩得越深越接近线性（否则深层偏移 100+ px）
+TL.bar_k = function(u)
+    local k5 = tonumber(o.tl_ov_k) or 1.19
+    if not u or u >= 0.5 then return k5 end
+    return 1 + (k5 - 1) * math.min(1, u / 0.5) ^ 0.68
+end
+
 TL.bar_geom = function(t0, t1, dur)
     if not dur or dur <= 0 then return 0, 1 end
     local u = math.max(0, math.min(1, (t1 - t0) / dur))
     local c = math.max(0, math.min(1, (t0 + t1) / (2 * dur)))
     local w = u ^ (tonumber(o.tl_ov_pow) or 1.29)
-    local xc = 0.5 + (c - 0.5) * (tonumber(o.tl_ov_k) or 1.188)
+    local xc = 0.5 + (c - 0.5) * TL.bar_k(u)
     local l, r = xc - w / 2, xc + w / 2
     if l < 0 then r, l = r - l, 0 end
     if r > 1 then l, r = l - (r - 1), 1 end
@@ -2861,7 +2870,7 @@ local function tl_grab_move(g, mx)
             n1 = math.min(g.dur, math.max(TL.bar_solve(g.dur, gr.t0, target, 'right'), gr.t0 + minspan))
             n0 = gr.t0
         else
-            local k = tonumber(o.tl_ov_k) or 1.188
+            local k = TL.bar_k(math.max(0, math.min(1, (gr.t1 - gr.t0) / math.max(1e-6, g.dur))))
             local x0m = ((gr.mx0 or mx) - g.x0) / math.max(1, g.rw)
             local half = (gr.t1 - gr.t0) / 2
             local mid = (((gr.t0 + gr.t1) / 2) / g.dur + (target - x0m) / k) * g.dur
