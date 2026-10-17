@@ -82,7 +82,7 @@ local o = {
     tl_scale = 2.0,            -- 第 9 条：时间轴自己的缩放因子（Pr 里时间轴高度 ≈ 控制栏的 2~3 倍）
     tl_min_frames = 15,        -- 第 9 条：时间轴最小跨度（帧）——滚轮最多放大到这么多帧
     tl_zoom_steps = '1.003,1.001,1.01',  -- 第 9 条：滚轮缩放步长（普通,Ctrl细,Shift粗）——用户实测手感值
-    tl_zoom_anchor = 'pr',     -- 第 9 条：缩放锚点 pr = 每档把播放头往区间中心拉（Pr 实测手感，默认）| head = 死钉播放头 | center = 钉区间中心
+    tl_zoom_anchor = 'snap',   -- 第 9 条：缩放锚点 snap = 缩放后播放头落在区间正中（Pr NS1 实测定论，默认）| head = 死钉播放头 | center = 钉区间中心 | pr = 每档拉向中心
     tl_zoom_pull = 0.585,      -- 第 9 条：pr 的拉力 —— Pr 实测"每 ×2 一步把离中心的偏移乘 2/3"，即 pull = -log2(2/3)
     tl_key_step = 2.0,         -- 第 9 条：Alt+= / Alt+- 的步长（Pr 的 = 实测就是 ×2）
     tl_labels = true,          -- 第 9 条：刻度上是否显示时间戳（Pr 没有；默认开）
