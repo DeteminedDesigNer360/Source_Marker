@@ -86,8 +86,9 @@ local o = {
     tl_zoom_pull = 0.585,      -- 第 9 条：pr 的拉力 —— Pr 实测"每 ×2 一步把离中心的偏移乘 2/3"，即 pull = -log2(2/3)
     tl_key_step = 2.0,         -- 第 9 条：Alt+= / Alt+- 的步长（Pr 的 = 实测就是 ×2）
     tl_labels = true,          -- 第 9 条：刻度上是否显示时间戳（Pr 没有；默认开）
-    tl_ov_map = 'pow',         -- 第 9 条：概览条映射 linear | sqrt | pow（Pr 实测是幂律，见 tl_ov_pow）
-    tl_ov_pow = 1.29,          -- 第 9 条：pow 的指数 —— Pr 实测"亮段宽 ∝ 区间^1.29"（每按一次 = 亮段 ×0.408）
+    tl_ov_map = 'bar',         -- 第 9 条：概览条映射 linear | sqrt | pow | bar（bar = Pr 实测形态，默认）
+    tl_ov_pow = 1.30,          -- 第 9 条：亮段宽 = u^pow —— 三轮实测 1.29~1.31，取 1.30
+    tl_ov_k = 1.188,           -- 第 9 条：bar 模式中心斜率 —— Pr NS3b 五点拟合 1.1886
 }
 opts.read_options(o, 'source-markers')
 
@@ -2353,8 +2354,14 @@ local function render_timeline()
         if mode == 'pow' then return f ^ (tonumber(o.tl_ov_pow) or 1.29) end   -- Pr 实测：亮段宽 ∝ 区间^1.29
         return f
     end
-    local wx0 = x0 + ov_frac(t0 / dur) * rw
-    local wx1 = x0 + ov_frac(t1 / dur) * rw
+    local wx0, wx1
+    if (o.tl_ov_map or 'linear') == 'bar' and TL.bar_geom then
+        local bl, br = TL.bar_geom(t0, t1, dur)     -- Pr 实测形态：宽度只看区间大小，中心线性放大
+        wx0, wx1 = x0 + bl * rw, x0 + br * rw
+    else
+        wx0 = x0 + ov_frac(t0 / dur) * rw
+        wx1 = x0 + ov_frac(t1 / dur) * rw
+    end
     local cr = math.max(3, math.floor(3.6 * s + 0.5))
     local grk = (TL.grab and TL.grab.kind) or ''      -- 抓取中：对应抓手画亮（r46）
     lines[#lines + 1] = rect_line(math.floor(wx0), ov_mid - 1, math.max(1, math.floor(wx1 - wx0)), 2,
@@ -2734,6 +2741,45 @@ local function tl_ov_time(g, mx)
     return f * g.dur
 end
 
+-- 概览条 'bar' 映射（Pr NS3/NS3b 实测定论）：
+--   u = (t1-t0)/dur, c = (t0+t1)/(2*dur)
+--   宽 w = u^pow（只由区间大小决定）；中心 xc = 0.5 + (c-0.5)*k（线性、斜率 k>1）
+--   left = xc - w/2, right = xc + w/2，再夹到 [0,1]（贴边时 Pr 也是夹住不是压缩）
+--   实测：u=1/2 时宽占比 0.4057、k=1.1886；五个位置预测误差 < 1.6 px
+TL.bar_geom = function(t0, t1, dur)
+    if not dur or dur <= 0 then return 0, 1 end
+    local u = math.max(0, math.min(1, (t1 - t0) / dur))
+    local c = math.max(0, math.min(1, (t0 + t1) / (2 * dur)))
+    local w = u ^ (tonumber(o.tl_ov_pow) or 1.29)
+    local xc = 0.5 + (c - 0.5) * (tonumber(o.tl_ov_k) or 1.188)
+    local l, r = xc - w / 2, xc + w / 2
+    if l < 0 then r, l = r - l, 0 end
+    if r > 1 then l, r = l - (r - 1), 1 end
+    if l < 0 then l = 0 end
+    if r > 1 then r = 1 end
+    return l, r
+end
+
+-- 'bar' 模式的反解：一端时间固定，二分求另一端，使那一端的归一化位置等于 target
+-- （t0 增大 ⇒ 左端右移；t1 增大 ⇒ 右端右移，两边都单调，可以直接二分）
+TL.bar_solve = function(dur, fixed, target, side)
+    local lo, hi
+    if side == 'left' then lo, hi = 0, fixed else lo, hi = fixed, dur end
+    if hi <= lo then return fixed end
+    for _ = 1, 42 do
+        local mid = (lo + hi) / 2
+        local cur
+        if side == 'left' then
+            cur = TL.bar_geom(mid, fixed, dur)
+        else
+            local _, rr = TL.bar_geom(fixed, mid, dur)
+            cur = rr
+        end
+        if cur < target then lo = mid else hi = mid end
+    end
+    return (lo + hi) / 2
+end
+
 -- Pr 式时间码输入：纯数字时**从右往左**两位一组读 = [时][分][秒][帧]，帧数超过 fps 自动进位
 -- 2200 → 22 秒 0 帧；120000 → 12 分 0 秒 0 帧；2245 @30fps → 23 秒 15 帧
 -- 带分隔符的（00:00:22:00 / 22.5 / 1:02:03）仍走导入侧那套 parse_time，两边规则不互相污染。
@@ -2793,7 +2839,7 @@ local function tl_grab_start(g, mx)
     local kind = 'mid'
     if math.abs(mx - g.wx0) <= 12 then kind = 'left'
     elseif math.abs(mx - g.wx1) <= 12 then kind = 'right' end
-    TL.grab = { kind = kind, t0 = g.t0, t1 = g.t1, base = tl_ov_time(g, mx) }
+    TL.grab = { kind = kind, t0 = g.t0, t1 = g.t1, base = tl_ov_time(g, mx), mx0 = mx }
     tl_grab_sections(true)
     msg.verbose(string.format('时间轴·抓起 %s（%.3f ~ %.3f，鼠标处 %.3f）：移动鼠标改范围，点任意处/按任意键放下，ESC 放弃',
         kind == 'left' and '左端' or (kind == 'right' and '右端' or '整段'), g.t0, g.t1, TL.grab.base))
@@ -2803,20 +2849,40 @@ end
 local function tl_grab_move(g, mx)
     local gr = TL.grab
     if not gr then return end
-    local at = tl_ov_time(g, mx)
     local minspan = tl_min_span()
     local n0, n1 = gr.t0, gr.t1
-    if gr.kind == 'left' then
-        n0 = math.max(0, math.min(at, gr.t1 - minspan))        -- 左圆跟鼠标，右端不动
-        n1 = gr.t1
-    elseif gr.kind == 'right' then
-        n1 = math.min(g.dur, math.max(at, gr.t0 + minspan))    -- 右圆跟鼠标，左端不动
-        n0 = gr.t0
+    if (o.tl_ov_map or 'linear') == 'bar' and TL.bar_geom and TL.bar_solve then
+        -- 'bar' 模式：抓手的 x 不是"时间尺度"，必须按映射反解（否则画的和点的错位）
+        local target = math.max(0, math.min(1, (mx - g.x0) / math.max(1, g.rw)))
+        if gr.kind == 'left' then
+            n0 = math.max(0, math.min(TL.bar_solve(g.dur, gr.t1, target, 'left'), gr.t1 - minspan))
+            n1 = gr.t1
+        elseif gr.kind == 'right' then
+            n1 = math.min(g.dur, math.max(TL.bar_solve(g.dur, gr.t0, target, 'right'), gr.t0 + minspan))
+            n0 = gr.t0
+        else
+            local k = tonumber(o.tl_ov_k) or 1.188
+            local x0m = ((gr.mx0 or mx) - g.x0) / math.max(1, g.rw)
+            local half = (gr.t1 - gr.t0) / 2
+            local mid = (((gr.t0 + gr.t1) / 2) / g.dur + (target - x0m) / k) * g.dur
+            n0, n1 = mid - half, mid + half
+            if n0 < 0 then n1, n0 = n1 - n0, 0 end
+            if n1 > g.dur then n0, n1 = n0 - (n1 - g.dur), g.dur end
+        end
     else
-        local d = at - gr.base                                 -- 整段平移：相对抓起那一刻的位移
-        n0, n1 = gr.t0 + d, gr.t1 + d
-        if n0 < 0 then n1, n0 = n1 - n0, 0 end
-        if n1 > g.dur then n0, n1 = n0 - (n1 - g.dur), g.dur end
+        local at = tl_ov_time(g, mx)
+        if gr.kind == 'left' then
+            n0 = math.max(0, math.min(at, gr.t1 - minspan))        -- 左圆跟鼠标，右端不动
+            n1 = gr.t1
+        elseif gr.kind == 'right' then
+            n1 = math.min(g.dur, math.max(at, gr.t0 + minspan))    -- 右圆跟鼠标，左端不动
+            n0 = gr.t0
+        else
+            local d = at - gr.base                                 -- 整段平移：相对抓起那一刻的位移
+            n0, n1 = gr.t0 + d, gr.t1 + d
+            if n0 < 0 then n1, n0 = n1 - n0, 0 end
+            if n1 > g.dur then n0, n1 = n0 - (n1 - g.dur), g.dur end
+        end
     end
     local c0, c1 = TL.t0 or 0, TL.t1 or g.dur                  -- 没变就别重绘（鼠标一动会来很多次）
     if math.abs(c0 - n0) < 1e-6 and math.abs(c1 - n1) < 1e-6 then return end
@@ -2960,7 +3026,7 @@ mp.register_script_message('tl-anchor', function(mode, pull)
 end)
 mp.register_script_message('tl-ov', function(mode, p)
     local m = tostring(mode)
-    if m == 'linear' or m == 'sqrt' or m == 'pow' then o.tl_ov_map = m end
+    if m == 'linear' or m == 'sqrt' or m == 'pow' or m == 'bar' then o.tl_ov_map = m end
     if tonumber(p) then o.tl_ov_pow = tonumber(p) end
     log('时间轴·概览映射 → %s（pow 指数 %s）', tostring(o.tl_ov_map), tostring(o.tl_ov_pow))
     render_timeline()
@@ -4059,7 +4125,7 @@ mp.register_script_message('state', function()
         tl_t0 = TL.t0, tl_t1 = TL.t1, tl_file = TL.cur_file,
         tl_min_frames = tonumber(o.tl_min_frames) or 15,
         tl_zoom_anchor = o.tl_zoom_anchor, tl_zoom_pull = o.tl_zoom_pull,
-        tl_ov_map = o.tl_ov_map, tl_ov_pow = o.tl_ov_pow,
+        tl_ov_map = o.tl_ov_map, tl_ov_pow = o.tl_ov_pow, tl_ov_k = o.tl_ov_k,
         tl_zoom_steps = TL.STEP and string.format('%s,%s,%s', tostring(TL.STEP.plain),
             tostring(TL.STEP.ctrl), tostring(TL.STEP.shift)) or nil,
     }))
