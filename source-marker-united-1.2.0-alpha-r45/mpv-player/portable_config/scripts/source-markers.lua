@@ -2620,10 +2620,14 @@ local function tl_zoom(factor, why)
     if anchor < t0c then anchor = t0c end              -- 播放头在范围外 ⇒ 以最近的边为轴
     if anchor > t1c then anchor = t1c end
     local p = (anchor - t0c) / span
-    -- 锚点模式：head = 死钉播放头；center = 钉区间中心；pr = 每档把播放头往中心拉（Pr 实测：偏移 ×2/3）
+    -- 锚点模式：head = 死钉播放头；center = 钉区间中心；
+    --           pr   = 每档把播放头往中心拉（上一轮按 T3 拟合：偏移 ×2/3）；
+    --           snap = 缩放后播放头**直接落在区间正中**（NS1 实测：Pr 从整片缩一档时 p 由 0.3333 → 0.5000）
     local anchor_mode = o.tl_zoom_anchor or 'head'
     if anchor_mode == 'center' then
         anchor = (t0c + t1c) / 2
+        p = 0.5
+    elseif anchor_mode == 'snap' then
         p = 0.5
     elseif anchor_mode == 'pr' then
         local pull = tonumber(o.tl_zoom_pull) or 0.585
@@ -2950,7 +2954,7 @@ mp.register_script_message('tl-steps', function(str)
 end)
 mp.register_script_message('tl-anchor', function(mode, pull)
     local m = tostring(mode)
-    o.tl_zoom_anchor = (m == 'center' or m == 'pr') and m or 'head'
+    o.tl_zoom_anchor = (m == 'center' or m == 'pr' or m == 'snap') and m or 'head'
     if tonumber(pull) then o.tl_zoom_pull = tonumber(pull) end
     log('时间轴·缩放锚点 → %s（拉力 %s）', tostring(o.tl_zoom_anchor), tostring(o.tl_zoom_pull))
 end)
