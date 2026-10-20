@@ -2855,8 +2855,23 @@ TL.bar_geom = function(t0, t1, dur)
     local u = math.max(0, math.min(1, (t1 - t0) / dur))
     local c = math.max(0, math.min(1, (t0 + t1) / (2 * dur)))
     local w = u ^ (tonumber(o.tl_ov_pow) or 1.29)
-    local xc = 0.5 + (c - 0.5) * TL.bar_k(u)
-    local l, r = xc - w / 2, xc + w / 2
+    -- 贴边必须**钉住**：区间碰到片头/片尾时，那一端就固定在 0/1，宽度照旧由 u 决定。
+    -- 否则中心公式（xc 带 k>1 的放大）会让"本该不动的另一端"跟着漂 —— 用户实测：
+    -- 播放头 0 时拖右圆从最小到最大，左端在 16s 起右移、23s 到顶、30s 回到原位（复现：138→147→138）。
+    local eps = dur * 1e-4
+    local at_head = (t0 <= eps)
+    local at_tail = (t1 >= dur - eps)
+    local l, r
+    if at_head and at_tail then
+        l, r = 0, 1
+    elseif at_head then
+        l, r = 0, w
+    elseif at_tail then
+        l, r = 1 - w, 1
+    else
+        local xc = 0.5 + (c - 0.5) * TL.bar_k(u)
+        l, r = xc - w / 2, xc + w / 2
+    end
     if l < 0 then r, l = r - l, 0 end
     if r > 1 then l, r = l - (r - 1), 1 end
     if l < 0 then l = 0 end
