@@ -2693,13 +2693,45 @@ for _, spec in ipairs(TL_KEYS) do
     end
 end
 
--- 滚轮：只要鼠标在 mpv 窗口里就吃（Pr 也是全窗口，不要求指针压在时间轴上）
+-- 滚轮（r46 第七轮）：Pr 是**分区**的 —— 时间轴上滚轮 = 播放头 ±1 帧，只有落在控制条
+-- （圆圈横条 + 滑轨那一整条）里滚轮才缩放。指针在时间轴外（画面区/按钮栏）时滚轮不做事。
+-- 这里不用 input section 分派（不同后端对 wheel 的 area 分派不一致），改成全局收 wheel 后按
+-- mouse-pos 的 y 判区域：既可日志取证，也不会因为 area 不生效而让滚轮整个失效。
+local TL_WHEEL_POS = nil          -- 取证钩子 tl-wheel-at 用：临时指定坐标
 local function tl_bind_wheel(key, fn)
     local ok, err = pcall(mp.add_key_binding, key, 'tl-wheel-' .. tostring(key):gsub('[^%w]', ''), fn)
     if not ok then log('滚轮绑定失败 %s：%s', key, tostring(err)) end
 end
-tl_bind_wheel('wheel_up',   function() tl_zoom(TL_STEP.plain, '滚轮上') end)
-tl_bind_wheel('wheel_down', function() tl_zoom(1 / TL_STEP.plain, '滚轮下') end)
+local function tl_wheel_region(x, y)
+    local g = TL.geo
+    if not g or not x or not y then return nil end
+    if x < g.x0 - 2 or x > g.x1 + 2 then return nil end
+    if y >= g.y_ov - 2 and y <= g.y_ov + g.h_ov + 2 then return 'con' end     -- 控制条：缩放
+    if y >= g.y_tc - 2 and y <= g.rl_y + 2 then return 'axis' end            -- 刻度/标记/时间码：单帧
+    return nil
+end
+local function tl_wheel_frame(dir)
+    local before = mp.get_property_number('time-pos') or 0
+    local fps = mp.get_property_number('estimated-vf-fps') or 30
+    local tf = math.floor(before * fps + 0.5) + (dir > 0 and 1 or -1)
+    if tf < 0 then tf = 0 end
+    mp.commandv(dir > 0 and 'frame-step' or 'frame-back-step')
+    log('时间轴·滚轮刻度区 → %s：自 %.3f 到帧 %d（%.3f）',
+        dir > 0 and '前进一帧' or '后退一帧', before, tf, tf / fps)
+end
+local function tl_wheel(dir)
+    local pos = TL_WHEEL_POS or mp.get_property_native('mouse-pos') or {}
+    local reg = tl_wheel_region(pos.x, pos.y)
+    if reg == 'axis' then
+        tl_wheel_frame(dir)
+    elseif reg == 'con' then
+        tl_zoom(dir > 0 and TL_STEP.plain or 1 / TL_STEP.plain, dir > 0 and '滚轮上' or '滚轮下')
+    else
+        msg.verbose(string.format('时间轴·滚轮（区域外 x=%s y=%s）忽略', tostring(pos.x), tostring(pos.y)))
+    end
+end
+tl_bind_wheel('wheel_up',   function() tl_wheel(1) end)
+tl_bind_wheel('wheel_down', function() tl_wheel(-1) end)
 tl_bind_wheel('Ctrl+wheel_up',   function() tl_zoom(TL_STEP.ctrl, 'Ctrl+滚轮上') end)
 tl_bind_wheel('Ctrl+wheel_down', function() tl_zoom(1 / TL_STEP.ctrl, 'Ctrl+滚轮下') end)
 tl_bind_wheel('Shift+wheel_up',   function() tl_zoom(TL_STEP.shift, 'Shift+滚轮上') end)
@@ -3015,6 +3047,14 @@ mp.register_script_message('tl-goto', function(str)
     local fr = math.floor(v * g.fps + 1e-6)
     mp.set_property_number('time-pos', fr / g.fps)
     msg.verbose(string.format('时间轴·输入 %s → %.3f（帧 %d）', str, fr / g.fps, fr))
+end)
+
+-- 自动化取证：tl-wheel-at x y dir —— 用给定坐标走一遍滚轮（本机不能注入鼠标）
+mp.register_script_message('tl-wheel-at', function(x, y, dir)
+    TL_WHEEL_POS = { x = tonumber(x), y = tonumber(y) }
+    local ok, err = pcall(tl_wheel, tonumber(dir) or 1)
+    TL_WHEEL_POS = nil
+    if not ok then log('时间轴·滚轮取证失败：%s', tostring(err)) end
 end)
 
 -- 调参钩子（运行时立即生效，不用重启；想长期保留就写进 source-markers.conf）：
