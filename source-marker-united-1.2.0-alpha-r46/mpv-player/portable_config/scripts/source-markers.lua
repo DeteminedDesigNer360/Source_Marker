@@ -90,8 +90,9 @@ tl_min_px = 40,            -- 第 9 条：概览条两圆最小间距（像素�
     tl_ov_map = 'bar',         -- 第 9 条：概览条映射 linear | sqrt | pow | bar（bar = Pr 实测形态，默认）
     tl_ov_pow = 1.30,          -- 第 9 条：亮段宽 = u^pow —— 三轮实测 1.29~1.31，取 1.30
     tl_ov_k = 1.19,            -- 第 9 条：bar 模式中心斜率（u=1/2 处）—— NS4 两轮拟合，深层按 u^0.68 衰减
+    tl_ov_pin = 'px',          -- 第 9 条：拖圆缩放的钉住口径 px = 另一端像素不动、该端时间微调（Pr 实测：左端漂 12~16 帧，默认）| time = 另一端时间不动
     tl_play_follow = 'pr',     -- 第 9 条：播放跟随 off | pr（播放中不动、暂停追平居中，默认）| page（播到区间尾翻页）| center（始终居中）
-tl_grab_feel = 'pr',       -- 第 9 条：拖圆缩放手感 pr（移动离播放头远的那端，接近 Pr 观察）| mouse（抓哪端动哪端）
+tl_grab_feel = 'mouse',    -- 第 9 条：拖圆缩放手感 mouse（抓哪端动哪端、另一端钉死，默认）| pr（两阶段：缩=远端动、放=被抓端动；跨度缩到 2×(播放头−近端) 以下会改成以播放头对称 ⇒ 钉住端漂移，用户上机否决）
 }
 opts.read_options(o, 'source-markers')
 
@@ -2928,6 +2929,27 @@ TL.bar_solve_center = function(dur, tph, target, side)
     return (lo + hi) / 2
 end
 
+-- 'bar' 模式的反解（像素钉死，Pr 上机实测定论：拖右圆时左端像素不动、左端时间微调 12~16 帧）
+-- anchor = 抓起时"另一端"的归一化位置（抓右端 ⇒ anchor 是左端 l0）；target = 被拖端的目标位置
+-- w = b-a 定 u，u 定 span；xc = (a+b)/2 定 c，再由 c 定时中 ⇒ 两端时间。
+TL.bar_solve_px = function(dur, anchor, target, side, minw)
+    if not dur or dur <= 0 or not anchor then return nil end
+    local pow = tonumber(o.tl_ov_pow) or 1.29
+    local a, b
+    if side == 'right' then a, b = anchor, target else a, b = target, anchor end
+    if minw and b - a < minw then          -- 跨度触底：宽度锁在最小跨度上，钉住端仍然不动
+        if side == 'right' then b = a + minw else a = b - minw end
+    end
+    local w = b - a
+    if w <= 1e-6 then return nil end
+    local u = w ^ (1 / pow)
+    if u > 1 then return nil end
+    local c = 0.5 + ((a + b) / 2 - 0.5) / TL.bar_k(u)
+    local span = u * dur
+    local mid = c * dur
+    return mid - span / 2, mid + span / 2
+end
+
 -- Pr 式时间码输入：纯数字时**从右往左**两位一组读 = [时][分][秒][帧]，帧数超过 fps 自动进位
 -- 2200 → 22 秒 0 帧；120000 → 12 分 0 秒 0 帧；2245 @30fps → 23 秒 15 帧
 -- 带分隔符的（00:00:22:00 / 22.5 / 1:02:03）仍走导入侧那套 parse_time，两边规则不互相污染。
@@ -2987,7 +3009,9 @@ local function tl_grab_start(g, mx)
     local kind = 'mid'
     if math.abs(mx - g.wx0) <= 12 then kind = 'left'
     elseif math.abs(mx - g.wx1) <= 12 then kind = 'right' end
-    TL.grab = { kind = kind, t0 = g.t0, t1 = g.t1, base = tl_ov_time(g, mx), mx0 = mx }
+    local gl0, gr0
+    if (o.tl_ov_map or 'linear') == 'bar' and TL.bar_geom then gl0, gr0 = TL.bar_geom(g.t0, g.t1, g.dur) end
+    TL.grab = { kind = kind, t0 = g.t0, t1 = g.t1, base = tl_ov_time(g, mx), mx0 = mx, l0 = gl0, r0 = gr0 }
     tl_grab_sections(true)
     msg.verbose(string.format('时间轴·抓起 %s（%.3f ~ %.3f，鼠标处 %.3f）：移动鼠标改范围，点任意处/按任意键放下，ESC 放弃',
         kind == 'left' and '左端' or (kind == 'right' and '右端' or '整段'), g.t0, g.t1, TL.grab.base))
@@ -3041,7 +3065,17 @@ local function tl_grab_move(g, mx)
             end
             return a, b
         end
-        if gr.kind == 'left' then
+        -- tl_ov_pin='px'：抓哪端，另一端就钉在抓起那一刻的像素上（Pr 实测口径），时间随之微调
+        local pinpx = TL.bar_solve_px and feel ~= 'pr' and tostring(o.tl_ov_pin or 'px') == 'px' and gr.l0 and gr.r0
+        local pa, pb
+        if pinpx and (gr.kind == 'left' or gr.kind == 'right') then
+            local wmin = (minspan / g.dur) ^ (tonumber(o.tl_ov_pow) or 1.29)
+            pa, pb = TL.bar_solve_px(g.dur, gr.kind == 'right' and gr.l0 or gr.r0, target, gr.kind, wmin)
+            if pa and not (pb - pa >= minspan - 1e-9 and pa >= -1e-9 and pb <= g.dur + 1e-9) then pa = nil end
+        end
+        if pa then
+            n0, n1 = math.max(0, pa), math.min(g.dur, pb)
+        elseif gr.kind == 'left' then
             local e = TL.bar_solve(g.dur, gr.t1, target, 'left')
             if inr and feel == 'pr' then
                 n0, n1 = tl_place(span0 - (e - gr.t0), 'left')
@@ -3104,7 +3138,9 @@ mp.add_key_binding(nil, 'tl-drop', function() TL.drop('点击/按键') end)
 mp.register_script_message('tl-grab', function(kind)
     local g = TL.geo
     if not g then return end
-    TL.grab = { kind = kind, t0 = g.t0, t1 = g.t1, base = tl_ov_time(g, g.x0 + g.rw / 2), mx0 = g.x0 + g.rw / 2 }
+    local gl0, gr0
+    if (o.tl_ov_map or 'linear') == 'bar' and TL.bar_geom then gl0, gr0 = TL.bar_geom(g.t0, g.t1, g.dur) end
+    TL.grab = { kind = kind, t0 = g.t0, t1 = g.t1, base = tl_ov_time(g, g.x0 + g.rw / 2), mx0 = g.x0 + g.rw / 2, l0 = gl0, r0 = gr0 }
     tl_grab_sections(true)
     msg.verbose('时间轴·抓起（取证）' .. tostring(kind))
 end)
@@ -4355,7 +4391,7 @@ mp.register_script_message('state', function()
         tl_t0 = TL.t0, tl_t1 = TL.t1, tl_file = TL.cur_file,
         tl_min_frames = tonumber(o.tl_min_frames) or 15,
         tl_zoom_anchor = o.tl_zoom_anchor, tl_zoom_pull = o.tl_zoom_pull,
-        tl_ov_map = o.tl_ov_map, tl_ov_pow = o.tl_ov_pow, tl_ov_k = o.tl_ov_k,
+        tl_ov_map = o.tl_ov_map, tl_ov_pow = o.tl_ov_pow, tl_ov_k = o.tl_ov_k, tl_ov_pin = o.tl_ov_pin,
         tl_play_follow = o.tl_play_follow,
         tl_zoom_steps = TL.STEP and string.format('%s,%s,%s', tostring(TL.STEP.plain),
             tostring(TL.STEP.ctrl), tostring(TL.STEP.shift)) or nil,
