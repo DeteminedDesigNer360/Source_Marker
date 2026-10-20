@@ -2719,11 +2719,12 @@ local function tl_wheel_frame(dir)
     log('时间轴·滚轮刻度区 → %s：自 %.3f 到帧 %d（%.3f）',
         dir > 0 and '前进一帧' or '后退一帧', before, tf, tf / fps)
 end
-local function tl_wheel(dir)
+local function tl_wheel(dir)          -- dir > 0 = 滚轮向上
     local pos = TL_WHEEL_POS or mp.get_property_native('mouse-pos') or {}
     local reg = tl_wheel_region(pos.x, pos.y)
     if reg == 'axis' then
-        tl_wheel_frame(dir)
+        -- 用户 2026-10-20 实测：时间轴上滚轮**向上 = 后退一帧**（与 Pr 一致），所以这里取反
+        tl_wheel_frame(-dir)
     elseif reg == 'con' then
         tl_zoom(dir > 0 and TL_STEP.plain or 1 / TL_STEP.plain, dir > 0 and '滚轮上' or '滚轮下')
     else
