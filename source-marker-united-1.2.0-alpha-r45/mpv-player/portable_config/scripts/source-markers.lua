@@ -2710,14 +2710,28 @@ local function tl_wheel_region(x, y)
     if y >= g.y_tc - 2 and y <= g.rl_y + 2 then return 'axis' end            -- 刻度/标记/时间码：单帧
     return nil
 end
+-- 滚动跟随（NS6 11A 定论）：播放头还在区间内 → 区间不动；一旦越出区间边界，就把区间**平移**（跨度不变），
+-- 让播放头回到区间内并尽量居中；贴到片头/片尾时夹边界，播放头因此无法居中（与 Pr 实测一致）。
+local function tl_follow_playhead(why)
+    local t0c, t1c, dur = tl_span()
+    local t = mp.get_property_number('time-pos')
+    if not t0c or not t1c or not t or not dur then return end
+    local span = t1c - t0c
+    if span >= dur - 1e-9 then return end            -- 整片：无可跟随
+    if t >= t0c - 1e-9 and t <= t1c + 1e-9 then return end
+    local n0 = t - span / 2
+    n0 = math.max(0, math.min(n0, dur - span))
+    tl_set_range(n0, n0 + span, (why or '跟随') .. '·播放头出区间')
+end
 local function tl_wheel_frame(dir)
     local before = mp.get_property_number('time-pos') or 0
     local fps = mp.get_property_number('estimated-vf-fps') or 30
     local tf = math.floor(before * fps + 0.5) + (dir > 0 and 1 or -1)
     if tf < 0 then tf = 0 end
-    mp.commandv(dir > 0 and 'frame-step' or 'frame-back-step')
+    mp.set_property_number('time-pos', tf / fps)
     log('时间轴·滚轮刻度区 → %s：自 %.3f 到帧 %d（%.3f）',
         dir > 0 and '前进一帧' or '后退一帧', before, tf, tf / fps)
+    tl_follow_playhead('滚轮')
 end
 local function tl_wheel(dir)          -- dir > 0 = 滚轮向上
     local pos = TL_WHEEL_POS or mp.get_property_native('mouse-pos') or {}
