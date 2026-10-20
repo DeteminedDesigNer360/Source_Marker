@@ -23,3 +23,6 @@ _tmp*
 
 # 由插件首次运行自动生成的键位模板（属运行时状态；随包发一份会随默认键位变更而静默过期）
 **/script-opts/source-markers-keys.conf
+
+# 运行时状态：mpv 每次运行都会重写 script-opts 下的配置（不是源码），不入库
+**/script-opts/source-markers.conf

@@ -90,6 +90,7 @@ local o = {
     tl_ov_pow = 1.30,          -- 第 9 条：亮段宽 = u^pow —— 三轮实测 1.29~1.31，取 1.30
     tl_ov_k = 1.19,            -- 第 9 条：bar 模式中心斜率（u=1/2 处）—— NS4 两轮拟合，深层按 u^0.68 衰减
     tl_play_follow = 'pr',     -- 第 9 条：播放跟随 off | pr（播放中不动、暂停追平居中，默认）| page（播到区间尾翻页）| center（始终居中）
+tl_grab_feel = 'pr',       -- 第 9 条：拖圆缩放手感 pr（移动离播放头远的那端，接近 Pr 观察）| mouse（抓哪端动哪端）
 }
 opts.read_options(o, 'source-markers')
 
@@ -2899,6 +2900,25 @@ TL.bar_solve = function(dur, fixed, target, side)
     return (lo + hi) / 2
 end
 
+-- 'bar' 模式的反解（第二段）：以播放头为轴两圆对称，反解"跨度"使指定一端正好落在 target 上
+-- （跨度变大 ⇒ 两端一起往两边铺，目标端的归一化位置单调递增，仍可二分）
+TL.bar_solve_center = function(dur, tph, target, side)
+    local lo = tl_min_span()
+    local hi = math.min(2 * tph, 2 * (dur - tph))
+    if hi <= lo then return nil end
+    local function pos(sp)
+        local l, r = TL.bar_geom(tph - sp / 2, tph + sp / 2, dur)
+        return side == 'left' and l or r
+    end
+    if pos(lo) >= target then return lo end
+    if pos(hi) <= target then return hi end
+    for _ = 1, 42 do
+        local mid = (lo + hi) / 2
+        if pos(mid) < target then lo = mid else hi = mid end
+    end
+    return (lo + hi) / 2
+end
+
 -- Pr 式时间码输入：纯数字时**从右往左**两位一组读 = [时][分][秒][帧]，帧数超过 fps 自动进位
 -- 2200 → 22 秒 0 帧；120000 → 12 分 0 秒 0 帧；2245 @30fps → 23 秒 15 帧
 -- 带分隔符的（00:00:22:00 / 22.5 / 1:02:03）仍走导入侧那套 parse_time，两边规则不互相污染。
@@ -2973,12 +2993,42 @@ local function tl_grab_move(g, mx)
     if (o.tl_ov_map or 'linear') == 'bar' and TL.bar_geom and TL.bar_solve then
         -- 'bar' 模式：抓手的 x 不是"时间尺度"，必须按映射反解（否则画的和点的错位）
         local target = math.max(0, math.min(1, (mx - g.x0) / math.max(1, g.rw)))
+        local feel = tostring(o.tl_grab_feel or 'pr')
+        local tph = tonumber(mp.get_property_number('time-pos'))
+        local inr = (tph and tph > gr.t0 + 1e-9 and tph < gr.t1 - 1e-9) and true or false
+        local span0 = gr.t1 - gr.t0
+        local p0 = inr and (tph - gr.t0) / span0 or 0.5
+        -- 阶段②：单圆（远端起效）；阶段③：播放头到中点后以播放头为轴两圆同时动（含连续切换）
+        local function tl_center(sp)
+            local sp2 = math.max(minspan, math.min(sp, 2 * tph, 2 * (g.dur - tph)))
+            local crossed
+            if p0 < 0.5 then crossed = (tph - gr.t0) > 0.5 * sp2 else crossed = (gr.t1 - tph) > 0.5 * sp2 end
+            return tph - sp2 / 2, tph + sp2 / 2, crossed
+        end
         if gr.kind == 'left' then
-            n0 = math.max(0, math.min(TL.bar_solve(g.dur, gr.t1, target, 'left'), gr.t1 - minspan))
-            n1 = gr.t1
+            local e = TL.bar_solve(g.dur, gr.t1, target, 'left')
+            if inr and feel == 'pr' then
+                local sp = math.max(minspan, span0 - (e - gr.t0))
+                if p0 < 0.5 then n0, n1 = gr.t0, gr.t0 + sp else n0, n1 = gr.t1 - sp, gr.t1 end
+                local c0, c1, crossed = tl_center(sp)
+                if crossed then n0, n1 = c0, c1 end
+            else
+                n0 = math.max(0, math.min(e, gr.t1 - minspan))
+                n1 = gr.t1
+                if inr and n0 > tph then n0 = math.max(0, math.min(tph, n1 - minspan)) end   -- 别让播放头掉出区间
+            end
         elseif gr.kind == 'right' then
-            n1 = math.min(g.dur, math.max(TL.bar_solve(g.dur, gr.t0, target, 'right'), gr.t0 + minspan))
-            n0 = gr.t0
+            local e = TL.bar_solve(g.dur, gr.t0, target, 'right')
+            if inr and feel == 'pr' then
+                local sp = math.max(minspan, span0 - (gr.t1 - e))
+                if p0 > 0.5 then n0, n1 = gr.t1 - sp, gr.t1 else n0, n1 = gr.t0, gr.t0 + sp end
+                local c0, c1, crossed = tl_center(sp)
+                if crossed then n0, n1 = c0, c1 end
+            else
+                n1 = math.min(g.dur, math.max(e, gr.t0 + minspan))
+                n0 = gr.t0
+                if inr and n1 < tph then n1 = math.min(g.dur, math.max(tph, gr.t0 + minspan)) end
+            end
         else
             local k = TL.bar_k(math.max(0, math.min(1, (gr.t1 - gr.t0) / math.max(1e-6, g.dur))))
             local x0m = ((gr.mx0 or mx) - g.x0) / math.max(1, g.rw)
