@@ -89,6 +89,7 @@ local o = {
     tl_ov_map = 'bar',         -- 第 9 条：概览条映射 linear | sqrt | pow | bar（bar = Pr 实测形态，默认）
     tl_ov_pow = 1.30,          -- 第 9 条：亮段宽 = u^pow —— 三轮实测 1.29~1.31，取 1.30
     tl_ov_k = 1.19,            -- 第 9 条：bar 模式中心斜率（u=1/2 处）—— NS4 两轮拟合，深层按 u^0.68 衰减
+    tl_play_follow = 'pr',     -- 第 9 条：播放跟随 off | pr（播放中不动、暂停追平居中，默认）| page（播到区间尾翻页）| center（始终居中）
 }
 opts.read_options(o, 'source-markers')
 
@@ -2721,8 +2722,55 @@ local function tl_follow_playhead(why)
     if t >= t0c - 1e-9 and t <= t1c + 1e-9 then return end
     local n0 = t - span / 2
     n0 = math.max(0, math.min(n0, dur - span))
+    if math.abs(n0 - t0c) < 1e-6 then return end     -- 贴边夹住后与现状相同：不重复记日志/落盘
     tl_set_range(n0, n0 + span, (why or '跟随') .. '·播放头出区间')
 end
+
+-- 播放跟随（r46 第九轮）：Pr 实测 —— 播放时区间**不动**（允许播放头跑出区间），暂停时才把区间平移、
+-- 让播放头尽量居中（贴片头/片尾夹边界时只能偏侧，与越界重排同源）。另给两个用户提的模式：
+--   page   = 播到区间尾就把区间头挪到旧区间尾（翻页），播放头持续播放，永不跑出区间
+--   center = 始终让播放头居中（到两端做不到就放跑）
+local TL_FOLLOW_T = 0
+local function tl_play_follow_check(why, playing)
+    local mode = tostring(o.tl_play_follow or 'pr')
+    if mode == 'off' then return end
+    local t0c, t1c, dur = tl_span()
+    local t = mp.get_property_number('time-pos')
+    if not t0c or not t1c or not t or not dur then return end
+    local span = t1c - t0c
+    if span >= dur - 1e-9 then return end                 -- 整片：无可跟随
+    if playing == nil then playing = mp.get_property_native('pause') == false end
+    if mode == 'pr' then
+        if playing then return end                        -- 播放中一动不动（与 Pr 一致）
+        tl_follow_playhead(why or '暂停')
+        return
+    end
+    if mode == 'page' then
+        if t > t1c - 1e-9 then
+            local n0 = math.min(t1c, dur - span)          -- 区间头 = 旧区间尾；贴片尾时夹回
+            if math.abs(n0 - t0c) > 1e-6 then tl_set_range(n0, n0 + span, '播放跟随(page)·翻页', false) end
+        elseif t < t0c + 1e-9 then
+            local n0 = math.max(0, t0c - span)
+            if math.abs(n0 - t0c) > 1e-6 then tl_set_range(n0, n0 + span, '播放跟随(page)·回翻', false) end
+        end
+        return
+    end
+    local c = (t0c + t1c) / 2
+    if math.abs(t - c) <= span * 0.15 then return end      -- center：15% 死区，免得每帧都挪
+    local n0 = math.max(0, math.min(t - span / 2, dur - span))
+    if math.abs(n0 - t0c) < 1e-6 then return end            -- 贴边时无法居中：不重复动作
+    tl_set_range(n0, n0 + span, '播放跟随(center)·居中', false)
+end
+local function tl_follow_tick(why)
+    local now = mp.get_time()
+    if now - TL_FOLLOW_T < 0.15 then return end            -- 节流：time-pos 变化很密
+    TL_FOLLOW_T = now
+    tl_play_follow_check(why, true)
+end
+mp.observe_property('time-pos', 'number', function() tl_follow_tick('播放') end)
+mp.observe_property('pause', 'native', function(_, p)
+    if p then tl_play_follow_check('暂停', false) end
+end)
 local function tl_wheel_frame(dir)
     local before = mp.get_property_number('time-pos') or 0
     local fps = mp.get_property_number('estimated-vf-fps') or 30
@@ -3095,6 +3143,14 @@ mp.register_script_message('tl-ov', function(mode, p)
     log('时间轴·概览映射 → %s（pow 指数 %s）', tostring(o.tl_ov_map), tostring(o.tl_ov_pow))
     render_timeline()
 end)
+-- 自动化取证：tl-follow off|pr|page|center [时间] [1=当作播放中] —— 切模式 → 跳时间 → 走一遍跟随判定
+mp.register_script_message('tl-follow', function(mode, t, playing)
+    local m = tostring(mode or '')
+    if m == 'off' or m == 'pr' or m == 'page' or m == 'center' then o.tl_play_follow = m end
+    if tonumber(t) then mp.set_property_number('time-pos', tonumber(t)) end
+    log('时间轴·跟随模式 → %s（样本 %s，播放中=%s）', tostring(o.tl_play_follow), tostring(t), tostring(playing))
+    tl_play_follow_check('取证', playing == '1')
+end)
 
 -- 每次重绘摆好可点区域；时间轴隐藏时清空（与 bar_sections_off 同一套做法）
 TL.place = function(g)
@@ -3111,6 +3167,7 @@ end
 -- 对外接口：第 9 条 r46 的点击/拖动（下一小步）与自动化测试都从这里调用
 TL.zoom, TL.pan, TL.reset = tl_zoom, tl_pan, tl_reset
 TL.set_range, TL.min_span, TL.clamp_range = tl_set_range, tl_min_span, tl_clamp_range
+TL.follow = tl_play_follow_check
 TL.ACTIONS = TL_ACTIONS
 TL.STEP = TL_STEP
 end
@@ -4190,6 +4247,7 @@ mp.register_script_message('state', function()
         tl_min_frames = tonumber(o.tl_min_frames) or 15,
         tl_zoom_anchor = o.tl_zoom_anchor, tl_zoom_pull = o.tl_zoom_pull,
         tl_ov_map = o.tl_ov_map, tl_ov_pow = o.tl_ov_pow, tl_ov_k = o.tl_ov_k,
+        tl_play_follow = o.tl_play_follow,
         tl_zoom_steps = TL.STEP and string.format('%s,%s,%s', tostring(TL.STEP.plain),
             tostring(TL.STEP.ctrl), tostring(TL.STEP.shift)) or nil,
     }))
