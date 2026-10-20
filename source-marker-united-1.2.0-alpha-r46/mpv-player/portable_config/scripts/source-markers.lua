@@ -81,6 +81,7 @@ local o = {
     tl = true,                 -- 第 9 条：Pr 风格下是否显示那条可缩放时间轴（默认开）
     tl_scale = 2.0,            -- 第 9 条：时间轴自己的缩放因子（Pr 里时间轴高度 ≈ 控制栏的 2~3 倍）
     tl_min_frames = 15,        -- 第 9 条：时间轴最小跨度（帧）——滚轮最多放大到这么多帧
+tl_min_px = 40,            -- 第 9 条：概览条两圆最小间距（像素，Pr 实测约 40）——长片上按它抬高最小跨度
     tl_zoom_steps = '1.003,1.001,1.01',  -- 第 9 条：滚轮缩放步长（普通,Ctrl细,Shift粗）——用户实测手感值
     tl_zoom_anchor = 'snap',   -- 第 9 条：缩放锚点 snap = 缩放后播放头落在区间正中（Pr NS1 实测定论，默认）| head = 死钉播放头 | center = 钉区间中心 | pr = 每档拉向中心
     tl_zoom_pull = 0.585,      -- 第 9 条：pr 的拉力 —— Pr 实测"每 ×2 一步把离中心的偏移乘 2/3"，即 pull = -log2(2/3)
@@ -2580,7 +2581,15 @@ end
 local function tl_min_span()
     local fr = tonumber(o.tl_min_frames) or 15
     if fr < 1 then fr = 1 end
-    return fr / (get_fps() or 25)
+    local s = fr / (get_fps() or 25)
+    -- Pr 的概览条两圆最小间距约 40 px；长片上"15 帧"会窄到抓不住（亮段宽 w = u^pow）
+    local g, dur = TL.geo, mp.get_property_number('duration')
+    if (o.tl_ov_map or 'linear') == 'bar' and g and g.rw and g.rw > 0 and dur and dur > 0 then
+        local pow = tonumber(o.tl_ov_pow) or 1.30
+        local u = (tonumber(o.tl_min_px) or 40) / g.rw
+        if u > 0 and u < 1 then s = math.max(s, dur * u ^ (1 / pow)) end
+    end
+    return s
 end
 
 -- 夹取：最小跨度 + 不出片头/片尾（full=true 表示等于整片，此时 TL 里存 nil）
@@ -2997,21 +3006,45 @@ local function tl_grab_move(g, mx)
         local tph = tonumber(mp.get_property_number('time-pos'))
         local inr = (tph and tph > gr.t0 + 1e-9 and tph < gr.t1 - 1e-9) and true or false
         local span0 = gr.t1 - gr.t0
-        local p0 = inr and (tph - gr.t0) / span0 or 0.5
-        -- 阶段②：单圆（远端起效）；阶段③：播放头到中点后以播放头为轴两圆同时动（含连续切换）
-        local function tl_center(sp)
-            local sp2 = math.max(minspan, math.min(sp, 2 * tph, 2 * (g.dur - tph)))
-            local crossed
-            if p0 < 0.5 then crossed = (tph - gr.t0) > 0.5 * sp2 else crossed = (gr.t1 - tph) > 0.5 * sp2 end
-            return tph - sp2 / 2, tph + sp2 / 2, crossed
+        local p0 = inr and (tph - gr.t0) / span0 or nil
+        local EPS = 0.02
+        -- 按"新跨度 sp 该摆在哪里"落位（越界/最小跨度交给 tl_clamp_range）：
+        --   · 播放头在正中 → 两圆对称于播放头（缩、放都对称）
+        --   · 播放头在区间外 → 被抓那端动
+        --   · 其它位置：缩 → 远端动、近端钉住；放 → 被抓那端动、另一端钉住
+        --   · 收缩越过中点 → 以播放头为轴（切换点连续）
+        local function tl_place(sp, grab)
+            local s2 = math.max(minspan, sp)
+            local a, b
+            if p0 == nil then
+                if grab == 'left' then a, b = gr.t1 - s2, gr.t1 else a, b = gr.t0, gr.t0 + s2 end
+            elseif math.abs(p0 - 0.5) <= EPS then
+                a, b = tph - s2 / 2, tph + s2 / 2
+            elseif s2 < span0 - 1e-9 then
+                if p0 < 0.5 then a, b = gr.t0, gr.t0 + s2 else a, b = gr.t1 - s2, gr.t1 end
+            else
+                if grab == 'left' then a, b = gr.t1 - s2, gr.t1 else a, b = gr.t0, gr.t0 + s2 end
+            end
+            if a < 0 then b, a = b - a, 0 end
+            if b > g.dur then a, b = a - (b - g.dur), g.dur end
+            if a < 0 then a = 0 end
+            if b > g.dur then b = g.dur end
+            if p0 and math.abs(p0 - 0.5) > EPS and b - a > 1e-6 then
+                local crossed
+                if p0 < 0.5 then crossed = (tph - a) > 0.5 * (b - a) else crossed = (b - tph) > 0.5 * (b - a) end
+                if crossed then
+                    local s3 = math.max(minspan, math.min(b - a, 2 * tph, 2 * (g.dur - tph)))
+                    a, b = tph - s3 / 2, tph + s3 / 2
+                    if a < 0 then b, a = b - a, 0 end
+                    if b > g.dur then a, b = a - (b - g.dur), g.dur end
+                end
+            end
+            return a, b
         end
         if gr.kind == 'left' then
             local e = TL.bar_solve(g.dur, gr.t1, target, 'left')
             if inr and feel == 'pr' then
-                local sp = math.max(minspan, span0 - (e - gr.t0))
-                if p0 < 0.5 then n0, n1 = gr.t0, gr.t0 + sp else n0, n1 = gr.t1 - sp, gr.t1 end
-                local c0, c1, crossed = tl_center(sp)
-                if crossed then n0, n1 = c0, c1 end
+                n0, n1 = tl_place(span0 - (e - gr.t0), 'left')
             else
                 n0 = math.max(0, math.min(e, gr.t1 - minspan))
                 n1 = gr.t1
@@ -3020,10 +3053,7 @@ local function tl_grab_move(g, mx)
         elseif gr.kind == 'right' then
             local e = TL.bar_solve(g.dur, gr.t0, target, 'right')
             if inr and feel == 'pr' then
-                local sp = math.max(minspan, span0 - (gr.t1 - e))
-                if p0 > 0.5 then n0, n1 = gr.t1 - sp, gr.t1 else n0, n1 = gr.t0, gr.t0 + sp end
-                local c0, c1, crossed = tl_center(sp)
-                if crossed then n0, n1 = c0, c1 end
+                n0, n1 = tl_place(span0 - (gr.t1 - e), 'right')
             else
                 n1 = math.min(g.dur, math.max(e, gr.t0 + minspan))
                 n0 = gr.t0
@@ -3069,7 +3099,19 @@ mp.add_key_binding('ESC', 'tl-grab-cancel', function()
     end
 end)
 mp.add_key_binding(nil, 'tl-drop', function() TL.drop('点击/按键') end)
--- 取证钩子：本机不能注入鼠标，用 tl-drag 直接喂一个 x 给抓取逻辑
+-- 取证钩子：本机不能注入鼠标。tl-grab 指定抓哪端，tl-drag-n 按"概览条归一化位置 0..1"喂坐标
+-- （归一化 ⇒ 探针不依赖窗口尺寸，--vo=null 无头也能跑）
+mp.register_script_message('tl-grab', function(kind)
+    local g = TL.geo
+    if not g then return end
+    TL.grab = { kind = kind, t0 = g.t0, t1 = g.t1, base = tl_ov_time(g, g.x0 + g.rw / 2), mx0 = g.x0 + g.rw / 2 }
+    tl_grab_sections(true)
+    msg.verbose('时间轴·抓起（取证）' .. tostring(kind))
+end)
+mp.register_script_message('tl-drag-n', function(u)
+    local g = TL.geo
+    if TL.grab and g then tl_grab_move(g, g.x0 + math.max(0, math.min(1, tonumber(u) or 0.5)) * g.rw) end
+end)
 mp.register_script_message('tl-drag', function(x)
     if TL.grab and TL.geo then tl_grab_move(TL.geo, tonumber(x)) end
 end)
@@ -3097,7 +3139,9 @@ local function tl_click(fx, fy, forced_dbl)
         local st = fr / g.fps
         if st > g.dur then st = g.dur end
         mp.set_property_number('time-pos', st)
-        msg.verbose(string.format('时间轴·%s → %.3f（帧 %d）', why, st, fr))
+        local tc0 = os.clock()
+        render_timeline()                        -- 立刻重绘，不等 time-pos 观察者（否则最坏多等一个节流周期）
+        msg.verbose(string.format('时间轴·%s → %.3f（帧 %d）｜重绘 %.1f ms', why, st, fr, (os.clock() - tc0) * 1000))
     end
 
     -- ① 两端时间码那一行：点左框改起点、点右框改终点（Pr 是点它自己输入跳转）
@@ -4364,7 +4408,7 @@ local last_tl_at = 0
 mp.observe_property('time-pos', 'number', function()
     if not (UI.bar and UI.style == 'prbar' and o.tl) then return end
     local now = os.clock()
-    if now - last_tl_at < 0.1 then return end
+    if now - last_tl_at < 0.05 then return end      -- 20 Hz：播放头走起来更顺（原 10 Hz 看着像卡）
     last_tl_at = now
     render_timeline()
 end)
