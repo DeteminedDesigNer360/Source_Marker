@@ -91,6 +91,7 @@ tl_min_px = 40,            -- 第 9 条：概览条两圆最小间距（像素�
     tl_ov_pow = 1.30,          -- 第 9 条：亮段宽 = u^pow —— 三轮实测 1.29~1.31，取 1.30
     tl_ov_k = 1.19,            -- 第 9 条：bar 模式中心斜率（u=1/2 处）—— NS4 两轮拟合，深层按 u^0.68 衰减
     tl_ov_pin = 'px',          -- 第 9 条：拖圆缩放的钉住口径 px = 另一端像素不动、该端时间微调（Pr 实测：左端漂 12~16 帧，默认）| time = 另一端时间不动
+    tl_hit_px = 13,            -- 第 9 条：概览条两个圆的命中半径（px）；圆直径约 12，放大到 1.1 倍 = 13
     tl_ov_edge = 'pin',        -- 第 9 条：概览条贴片头/片尾时的映射 pin = 那一端钉死在 0/1（默认，跨过贴边瞬间会跳 6~21 px）| pr = 连续口径（不跳，但贴边那端会漂几 px）
     tl_play_follow = 'pr',     -- 第 9 条：播放跟随 off | pr（播放中不动、暂停追平居中，默认）| page（播到区间尾翻页）| center（始终居中）
 tl_grab_feel = 'mouse',    -- 第 9 条：拖圆缩放手感 mouse（抓哪端动哪端、另一端钉死，默认）| pr（两阶段：缩=远端动、放=被抓端动；跨度缩到 2×(播放头−近端) 以下会改成以播放头对称 ⇒ 钉住端漂移，用户上机否决）
@@ -2926,11 +2927,27 @@ TL.bar_solve_center = function(dur, tph, target, side)
         local l, r = TL.bar_geom(tph - sp / 2, tph + sp / 2, dur)
         return side == 'left' and l or r
     end
-    if pos(lo) >= target then return lo end
-    if pos(hi) <= target then return hi end
+    -- 端点位置随跨度的单调方向取决于抓哪一端：抓右端（r）跨度越大越靠右；
+    -- 抓左端（l）跨度越大越靠左 ⇒ 二分方向必须反着走。
+    -- （r46 第十八轮修：原来一律按"越大越靠右"处理，抓左端时永远返回最小跨度，
+    --   表现就是左圆一进同动立刻缩到最小区间。）
+    local inc = (side ~= 'left')
+    local q0, q1 = pos(lo), pos(hi)
+    if inc then
+        if q0 >= target then return lo end
+        if q1 <= target then return hi end
+    else
+        if q0 <= target then return lo end
+        if q1 >= target then return hi end
+    end
     for _ = 1, 42 do
         local mid = (lo + hi) / 2
-        if pos(mid) < target then lo = mid else hi = mid end
+        local q = pos(mid)
+        if inc then
+            if q < target then lo = mid else hi = mid end
+        else
+            if q > target then lo = mid else hi = mid end
+        end
     end
     return (lo + hi) / 2
 end
@@ -3013,8 +3030,10 @@ end
 
 local function tl_grab_start(g, mx)
     local kind = 'mid'
-    if math.abs(mx - g.wx0) <= 12 then kind = 'left'
-    elseif math.abs(mx - g.wx1) <= 12 then kind = 'right' end
+    -- 圆直径约 12 px，命中半径放大到 1.1 倍（tl_hit_px），圆看着抓不住的问题就解决了
+    local hitr = tonumber(o.tl_hit_px) or 13
+    if math.abs(mx - g.wx0) <= hitr then kind = 'left'
+    elseif math.abs(mx - g.wx1) <= hitr then kind = 'right' end
     local gl0, gr0
     if (o.tl_ov_map or 'linear') == 'bar' and TL.bar_geom then gl0, gr0 = TL.bar_geom(g.t0, g.t1, g.dur) end
     -- 播放头位置只取抓起那一刻的快照：播放中拖动时 time-pos 一直在变，按实时值算 p0 会让
@@ -3084,16 +3103,37 @@ local function tl_grab_move(g, mx)
         -- mouse 手感也要保留；不这样做时抓右圆只会缩右边，播放头会被挤到边上）
         local sym
         local lim = gr.sym and 0.05 or EPS
-        if pn and math.abs(pn - 0.5) <= lim and TL.bar_solve_center then
-            local sp = TL.bar_solve_center(g.dur, tph, target, gr.kind)
-            -- 对称解已经贴到片头/片尾（sp 触界）就退回单动：否则用户会被“两边一起卡住”锁死
+        -- 抓中段（mid）永远是整体平移：播放头在区间正中时也让 mid 进对称的话，横轴就拖不动了
+        if gr.kind ~= 'mid' and pn and math.abs(pn - 0.5) <= lim and TL.bar_solve_center then
             local hi = math.min(2 * tph, 2 * (g.dur - tph))
-            if sp and sp < hi - 1e-6 and (tph - sp / 2) >= -1e-9 and (tph + sp / 2) <= g.dur + 1e-9 then
-                sym = sp
-            elseif TL.bar_geom then
-                -- 对称已经贴到片头/片尾：退回单动，并把锚点换成**当前**像素，别跳回抓起时的位置
-                gr.l0, gr.r0 = TL.bar_geom(g.t0, g.t1, g.dur)
+            if gr.sym_ready == nil then
+                -- 进入同动的**第一帧**：跨度保持不变，只把中点点到播放头上（跳幅 = |区间中点−播放头|，模式切换的固有最小值）；
+                -- 同时记下"鼠标位置 − 被抓端位置"的偏移 gr.sym_off，后面每帧都用它换算 ——
+                -- 否则切模式那一下会按鼠标绝对位置重排区间（实测跳 0.3~0.9 s）
+                local sp_cur = math.min(g.t1 - g.t0, hi)
+                if sp_cur >= minspan - 1e-9 and sp_cur < hi - 1e-6 then
+                    local gl2, gr2 = TL.bar_geom(tph - sp_cur / 2, tph + sp_cur / 2, g.dur)
+                    gr.sym_off = target - ((gr.kind == 'left') and gl2 or gr2)
+                    gr.sym_ready = true
+                    sym = sp_cur
+                else
+                    gr.sym_ready = false
+                    gr.sym_off = 0
+                    gr.l0, gr.r0 = TL.bar_geom(g.t0, g.t1, g.dur)
+                end
+            elseif gr.sym_ready then
+                local sp = TL.bar_solve_center(g.dur, tph, target - gr.sym_off, gr.kind)
+                -- 对称解已经贴到片头/片尾（sp 触界）就退回单动：否则用户会被“两边一起卡住”锁死
+                if sp and sp < hi - 1e-6 and (tph - sp / 2) >= -1e-9 and (tph + sp / 2) <= g.dur + 1e-9 then
+                    sym = sp
+                elseif TL.bar_geom then
+                    -- 对称已经贴到片头/片尾：退回单动，并把锚点换成**当前**像素，别跳回抓起时的位置
+                    gr.l0, gr.r0 = TL.bar_geom(g.t0, g.t1, g.dur)
+                    gr.sym_ready, gr.sym_off = nil, nil
+                end
             end
+        else
+            gr.sym_ready, gr.sym_off = nil, nil
         end
         gr.sym = (sym ~= nil)
         -- tl_ov_pin='px'：抓哪端，另一端就钉在抓起那一刻的像素上（Pr 实测口径），时间随之微调
@@ -4449,7 +4489,7 @@ mp.register_script_message('state', function()
         tl_t0 = TL.t0, tl_t1 = TL.t1, tl_file = TL.cur_file,
         tl_min_frames = tonumber(o.tl_min_frames) or 15,
         tl_zoom_anchor = o.tl_zoom_anchor, tl_zoom_pull = o.tl_zoom_pull,
-        tl_ov_map = o.tl_ov_map, tl_ov_pow = o.tl_ov_pow, tl_ov_k = o.tl_ov_k, tl_ov_pin = o.tl_ov_pin, tl_ov_edge = o.tl_ov_edge,
+        tl_ov_map = o.tl_ov_map, tl_ov_pow = o.tl_ov_pow, tl_ov_k = o.tl_ov_k, tl_ov_pin = o.tl_ov_pin, tl_ov_edge = o.tl_ov_edge, tl_hit_px = o.tl_hit_px,
         tl_play_follow = o.tl_play_follow,
         tl_zoom_steps = TL.STEP and string.format('%s,%s,%s', tostring(TL.STEP.plain),
             tostring(TL.STEP.ctrl), tostring(TL.STEP.shift)) or nil,
