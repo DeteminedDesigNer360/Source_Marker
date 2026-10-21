@@ -2280,7 +2280,9 @@ local function tl_metrics()
     -- 圆的**视觉**半径：poly 半径 cr + 1（外圈）+ 1（描边）＝ cr+2。
     -- Pr 的构造是"轨道高度 = 圆的直径、圆与轨道上下沿相切"，概览行必须容得下整个圆，
     -- 所以 ov_h 和轨道高都按视觉半径算（以前按 7*s 算，圆比轨道高一半，超出轨道的部分点不到）。
-    local crv     = math.max(3, math.floor(3.6 * s + 0.5)) + 2
+    -- 视觉半径 = poly 半径 + 1（外圈）；轨道高 = 2*crv 才能和圆上下沿正好齐平
+    -- （早先按 +2 算，轨道比圆高出各 1 px —— 用户看到的"条上下多露出 1px"）
+    local crv     = math.max(3, math.floor(3.6 * s + 0.5)) + 1
     local ov_h    = math.max(6, math.floor(7 * s + 0.5), 2 * crv + 2)
     local lab_sz  = math.max(9, tc_sz - 2)
     local mh      = math.max(5, math.floor(7 * s + 0.5))
@@ -2358,7 +2360,8 @@ local function render_timeline()
     -- Pr 的构造：轨道高度 = 圆的直径（圆与轨道上下沿相切），亮段是与轨道同高的矩形
     local crv = m.cr or (math.max(3, math.floor(3.6 * s + 0.5)) + 2)
     local ov_track_h = math.max(3, 2 * crv)
-    lines[#lines + 1] = rect_line(x0, ov_mid - math.floor(ov_track_h / 2), rw, ov_track_h, '&H141414&', '00')
+    -- 非激活轨道：Pr 标准色 0x313131（以前是 0x141414，比 Pr 暗一档）
+    lines[#lines + 1] = rect_line(x0, ov_mid - math.floor(ov_track_h / 2), rw, ov_track_h, '&H313131&', '00')
     local function ov_frac(f)
         f = math.max(0, math.min(1, f))
         local mode = o.tl_ov_map or 'linear'
@@ -2385,8 +2388,16 @@ local function render_timeline()
         local r = hot and (cr + 2) or cr
         lines[#lines + 1] = poly_line(cx - r - 1, ov_mid - r - 1, (r + 1) / 10, '&H101010&', '40',
             circle_pts(10, 10, 10))
-        lines[#lines + 1] = poly_line(cx - r, ov_mid - r, r / 10, hot and '&HFFFFFF&' or '&HE8E8E8&', '00',
+        -- Pr 的抓手是**空心环**（外圈亮环 + 中心挖空成比轨道更暗的圆），不是实心圆盘：
+        -- 实测 Pr 截图像素：环 0x8A8A8A、环心 0x1D1D1D、条 0x313131；抓取/hover 时环变纯白并放大 2 px
+        lines[#lines + 1] = poly_line(cx - r, ov_mid - r, r / 10, hot and '&HFFFFFF&' or '&H8A8A8A&', '00',
             circle_pts(10, 10, 10))
+        local ring = math.max(2, math.floor(cr * 0.34 + 1.0))     -- 环厚：约为半径的 1/3
+        local rr = r - ring
+        if rr >= 1 then
+            lines[#lines + 1] = poly_line(cx - rr, ov_mid - rr, rr / 10, '&H1D1D1D&', '00',
+                circle_pts(10, 10, 10))
+        end
     end
 
     -- ⑥a 播放头竖条：**先画**，下面的刻度会盖在它上面（Pr 的行为：刻度在播放头上层）
