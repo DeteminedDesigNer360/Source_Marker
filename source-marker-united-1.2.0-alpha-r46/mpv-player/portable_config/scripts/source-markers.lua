@@ -3151,11 +3151,20 @@ local function tl_grab_move(g, mx)
                 illegal = true
             end
         end
+        -- 转嫁刚生效的那一帧：把**当前**两端像素与**当前**鼠标位置记成基准。
+        -- 不能拿抓起时的 gr.l0/gr.r0 + gr.mx0 当基准：从抓起走到触发转转可能已经
+        -- 滑过大半条轨道，一转嫁就把区间整体甩走十几秒
+        -- （用户日志实测：0~19.926 一帧变成 10.309~19.102，左圆瞬移到 10.3 s）。
+        if illegal and not gr.trans and TL.bar_geom then
+            gr.mx_ref = mx
+            gr.l_ref, gr.r_ref = TL.bar_geom(g.t0, g.t1, g.dur)
+        end
         -- 真正退出转嫁的那一帧：锚点换成当前像素、并记下“端点 − 鼠标”的偏移，
         -- 单动从当前位置继续跟手，否则切回单动时端点会跳到抓起时的老位置。
         if gr.trans and growing and TL.bar_geom then
             gr.l0, gr.r0 = TL.bar_geom(g.t0, g.t1, g.dur)
             gr.mx_off = ((gr.kind == 'right') and gr.r0 or gr.l0) - target
+            gr.mx_ref, gr.l_ref, gr.r_ref = nil, nil, nil     -- 下次转嫁重新取基准
         end
         -- 抓中段（mid）永远是整体平移：播放头在区间正中时也让 mid 进对称的话，横轴就拖不动了
         -- 除了"落在 0.5 附近"的窗口，**跨过 0.5** 也算进入：鼠标快拖时一帧能跨过整个窗口
@@ -3232,16 +3241,18 @@ local function tl_grab_move(g, mx)
         -- 播放头随之逼近中点；到 p=0.5 后由上面的对称分支接管（两圆同时动）。
         local kind_eff, target_eff = gr.kind, target
         gr.trans = illegal
-        if illegal and gr.l0 and gr.r0 then
+        if illegal and TL.bar_geom then
             kind_eff = (gr.kind == 'left') and 'right' or 'left'
-            -- gr.l0/gr.r0 是归一化端点（0..1）。转嫁 = 另一端按“鼠标位移的反向”移动，
-            -- 所以要用抓起时的鼠标位置做基准（不能假设鼠标一定压在端点上）
+            -- 归一化端点（0..1）。转嫁 = 另一端按“鼠标位移的反向”移动；基准取转嫁开始时
+            -- 记下的 gr.l_ref/gr.r_ref 与 gr.mx_ref（不是抓起时的 gr.l0/gr.r0 与 gr.mx0）
             local mxn = (mx - g.x0) / math.max(1, g.rw)
-            local m0n = ((gr.mx0 or mx) - g.x0) / math.max(1, g.rw)
+            local m0n = ((gr.mx_ref or gr.mx0 or mx) - g.x0) / math.max(1, g.rw)
+            local lref = gr.l_ref or gr.l0
+            local rref = gr.r_ref or gr.r0
             if gr.kind == 'left' then
-                target_eff = gr.r0 - (mxn - m0n)
+                target_eff = rref - (mxn - m0n)
             else
-                target_eff = gr.l0 + (m0n - mxn)
+                target_eff = lref + (m0n - mxn)
             end
             target_eff = math.max(0, math.min(1, target_eff))
         end
