@@ -2544,7 +2544,7 @@ local function render_timeline()
         TL.place({
             x0 = x0, x1 = x1, rw = rw, t0 = t0, t1 = t1, span = span, dur = dur, fps = fps,
             y_tc = row_tc, h_tc = tc_sz, y_lab = row_lab, rl_y = rl_y,
-            y_ov = row_ov, h_ov = ov_h, w_l = wl, w_r = wr, wx0 = wx0, wx1 = wx1,
+            y_ov = row_ov, h_ov = ov_h, w_l = wl, w_r = wr, wx0 = wx0, wx1 = wx1, cr = cr,
         })
     end
     -- 中间量打进日志（位置类问题只能靠它精确定位，别靠肉眼数像素）
@@ -3031,7 +3031,8 @@ end
 local function tl_grab_start(g, mx)
     local kind = 'mid'
     -- 圆直径约 12 px，命中半径放大到 1.1 倍（tl_hit_px），圆看着抓不住的问题就解决了
-    local hitr = tonumber(o.tl_hit_px) or 13
+    -- 圆半径随窗口缩放走（cr = 3.6*s），大窗口上圆更大，命中半径要跟着长，否则圆的左右边缘点不中
+    local hitr = math.max(tonumber(o.tl_hit_px) or 13, (g.cr or 4) + 6)
     -- 圆贴到画布边缘时，外侧那一半在窗口外根本点不到（命中框看着变小）；把内侧补一倍，
     -- 让贴边圆的可点宽度和中间的圆一样。取更近的那个目标，否则两端各补一倍会互相抢。
     local hrl = ((g.wx0 - g.x0) < hitr) and hitr * 2 or hitr
@@ -3058,6 +3059,7 @@ local function tl_grab_move(g, mx)
     if not gr then return end
     local minspan = tl_min_span()
     local n0, n1 = gr.t0, gr.t1
+    local pn                                   -- p = 播放头在当前区间里的位置（只有 bar 模式算）
     if (o.tl_ov_map or 'linear') == 'bar' and TL.bar_geom and TL.bar_solve then
         -- 'bar' 模式：抓手的 x 不是"时间尺度"，必须按映射反解（否则画的和点的错位）
         local target = math.max(0, math.min(1, (mx - g.x0) / math.max(1, g.rw)))
@@ -3070,7 +3072,7 @@ local function tl_grab_move(g, mx)
         -- 拖动时区间一直在变，p 会连续地从 0 漂到 0.5，到中点附近就切进“两圆对称”，离开就退回单动。
         -- 进用 0.02、出用 0.05（迟滞），状态记在 gr.sym —— 这样“拖到一半进入同动”和“退出同动”都成立。
         local span_cur = math.max(1e-9, g.t1 - g.t0)
-        local pn = (tph and tph > g.t0 + 1e-9 and tph < g.t1 - 1e-9) and (tph - g.t0) / span_cur or nil
+        pn = (tph and tph > g.t0 + 1e-9 and tph < g.t1 - 1e-9) and (tph - g.t0) / span_cur or nil
         local EPS = 0.02
         -- 按"新跨度 sp 该摆在哪里"落位（越界/最小跨度交给 tl_clamp_range）：
         --   · 播放头在正中 → 两圆对称于播放头（缩、放都对称）
@@ -3114,16 +3116,23 @@ local function tl_grab_move(g, mx)
         -- 而是让“抓的那个圆不动、把另一个圆移过来”，也就是先把播放头拉到 p=0.5 再两圆同动。
         local illegal = false
         if inr and pn and (gr.kind == 'left' or gr.kind == 'right') and TL.bar_geom then
-            -- bar_geom 返回的是归一化端点（0..1），鼠标要换算成归一化再比，否则恒判"在缩小"
-            local glc, grc = TL.bar_geom(g.t0, g.t1, g.dur)
-            local mxn = (mx - g.x0) / math.max(1, g.rw)
-            local shrinking = (gr.kind == 'left') and (mxn > glc) or (gr.kind == 'right' and mxn < grc)
+            -- 方向必须看“鼠标相对上一帧往哪动”，不能拿鼠标和当前端点比：
+            -- 同动之后端点被摆到别处，回拖（放大）也会被判成“在缩小”，于是误触发转嫁、区间乱跳。
+            local prev_mx = gr.mx_prev or gr.mx0 or mx
+            local dpx = mx - prev_mx
+            local shrinking = (gr.kind == 'left') and (dpx > 0.5) or (gr.kind == 'right' and dpx < -0.5)
             if shrinking and ((pn < 0.5 and gr.kind == 'left') or (pn > 0.5 and gr.kind == 'right')) then
                 illegal = true
             end
+            -- 一旦转嫁，本次拖动内保持转嫁语义（钉住被抓端、另一端跟手）：
+            -- 回拖时切回“抓哪端动哪端”，锚点会从“被抓端”换回“另一端”，区间必然跳一下。
+            if gr.trans then illegal = true end
         end
         -- 抓中段（mid）永远是整体平移：播放头在区间正中时也让 mid 进对称的话，横轴就拖不动了
-        if gr.kind ~= 'mid' and pn and math.abs(pn - 0.5) <= lim and TL.bar_solve_center then
+        -- 除了"落在 0.5 附近"的窗口，**跨过 0.5** 也算进入：鼠标快拖时一帧能跨过整个窗口
+        -- （0.02 窗口在 0~15 上只有 0.3 s），跨过去就再也回不来，用户看到的是"有概率进不去"。
+        local crossed_half = pn ~= nil and gr.pn_prev ~= nil and ((gr.pn_prev - 0.5) * (pn - 0.5) <= 0)
+        if gr.kind ~= 'mid' and pn and (math.abs(pn - 0.5) <= lim or crossed_half) and not gr.sym_block and TL.bar_solve_center then
             local hi = math.min(2 * tph, 2 * (g.dur - tph))
             if gr.sym_ready == nil then
                 -- 进入同动的**第一帧**：跨度保持不变，只把中点点到播放头上（跳幅 = |区间中点−播放头|，模式切换的固有最小值）；
@@ -3146,16 +3155,22 @@ local function tl_grab_move(g, mx)
             elseif gr.sym_ready then
                 local sp = TL.bar_solve_center(g.dur, tph, target - gr.sym_off, gr.kind)
                 -- 对称解已经贴到片头/片尾（sp 触界）就退回单动：否则用户会被“两边一起卡住”锁死
-                if sp and sp < hi - 1e-6 and (tph - sp / 2) >= -1e-9 and (tph + sp / 2) <= g.dur + 1e-9 then
+                -- sp == hi 是合法解（居中且正好贴到片头/片尾）：进入同动那一帧跨度往往就等于 hi，
+                -- 以前写成 sp < hi - 1e-6 会把这一帧判成“触界”，于是刚进去就退回单动 = 区间乱窜
+                if sp and sp <= hi + 1e-6 and (tph - sp / 2) >= -1e-9 and (tph + sp / 2) <= g.dur + 1e-9 then
                     sym = sp
                 elseif TL.bar_geom then
-                    -- 对称已经贴到片头/片尾：退回单动，并把锚点换成**当前**像素，别跳回抓起时的位置
+                    -- 对称已经贴到片头/片尾：退回单动，并把锚点换成**当前**像素，别跳回抓起时的位置。
+                    -- 同时上锁：同动里 p 恒 0.5，不锁的话下一帧又会“进入同动 → 立刻触界 → 退回”，
+                    -- 用户看到的就是区间闪现 + 漂移 + 反复横跳。锁要等播放头真正离开窗口才解。
                     gr.l0, gr.r0 = TL.bar_geom(g.t0, g.t1, g.dur)
                     gr.sym_ready, gr.sym_off = nil, nil
+                    gr.sym_block = true
                 end
             end
         else
-            gr.sym_ready, gr.sym_off = nil, nil
+            -- 播放头离开 p=0.5 的窗口：解锁，下次回到中点还能再进同动
+            gr.sym_ready, gr.sym_off, gr.sym_block = nil, nil, nil
         end
         gr.sym = (sym ~= nil)
         -- tl_ov_pin='px'：抓哪端，另一端就钉在抓起那一刻的像素上（Pr 实测口径），时间随之微调
@@ -3164,10 +3179,19 @@ local function tl_grab_move(g, mx)
         -- 就换成“抓另一端、鼠标位置镜像到区间另一侧”：被抓的那端钉住，另一端跟手移过来，
         -- 播放头随之逼近中点；到 p=0.5 后由上面的对称分支接管（两圆同时动）。
         local kind_eff, target_eff = gr.kind, target
+        gr.trans = illegal
         if illegal and gr.l0 and gr.r0 then
             kind_eff = (gr.kind == 'left') and 'right' or 'left'
-            -- gr.l0/gr.r0 是归一化端点（0..1）；鼠标位置镜像到区间另一侧 = l0 + r0 - 鼠标归一化位置
-            target_eff = math.max(0, math.min(1, gr.l0 + gr.r0 - (mx - g.x0) / math.max(1, g.rw)))
+            -- gr.l0/gr.r0 是归一化端点（0..1）。转嫁 = 另一端按“鼠标位移的反向”移动，
+            -- 所以要用抓起时的鼠标位置做基准（不能假设鼠标一定压在端点上）
+            local mxn = (mx - g.x0) / math.max(1, g.rw)
+            local m0n = ((gr.mx0 or mx) - g.x0) / math.max(1, g.rw)
+            if gr.kind == 'left' then
+                target_eff = gr.r0 - (mxn - m0n)
+            else
+                target_eff = gr.l0 + (m0n - mxn)
+            end
+            target_eff = math.max(0, math.min(1, target_eff))
         end
         local pa, pb
         if pinpx and (kind_eff == 'left' or kind_eff == 'right') then
@@ -3244,6 +3268,8 @@ local function tl_grab_move(g, mx)
             if n1 > g.dur then n0, n1 = n0 - (n1 - g.dur), g.dur end
         end
     end
+    gr.mx_prev = mx                                            -- 供下一帧判“往哪边拖”
+    gr.pn_prev = pn                                            -- 供下一帧判“有没有跨过 p=0.5”
     local c0, c1 = TL.t0 or 0, TL.t1 or g.dur                  -- 没变就别重绘（鼠标一动会来很多次）
     if math.abs(c0 - n0) < 1e-6 and math.abs(c1 - n1) < 1e-6 then return end
     tl_set_range(n0, n1, gr.kind == 'left' and '抓取左端' or (gr.kind == 'right' and '抓取右端' or '抓取平移'))
@@ -3262,14 +3288,19 @@ end)
 mp.add_key_binding(nil, 'tl-drop', function() TL.drop('点击/按键') end)
 -- 取证钩子：本机不能注入鼠标。tl-grab 指定抓哪端，tl-drag-n 按"概览条归一化位置 0..1"喂坐标
 -- （归一化 ⇒ 探针不依赖窗口尺寸，--vo=null 无头也能跑）
-mp.register_script_message('tl-grab', function(kind)
+mp.register_script_message('tl-grab', function(kind, u0)
     local g = TL.geo
     if not g then return end
     local gl0, gr0
     if (o.tl_ov_map or 'linear') == 'bar' and TL.bar_geom then gl0, gr0 = TL.bar_geom(g.t0, g.t1, g.dur) end
     local tph0 = tonumber(mp.get_property_number('time-pos'))
     local p00 = (tph0 and tph0 > g.t0 + 1e-9 and tph0 < g.t1 - 1e-9) and (tph0 - g.t0) / (g.t1 - g.t0) or nil
-    TL.grab = { kind = kind, t0 = g.t0, t1 = g.t1, base = tl_ov_time(g, g.x0 + g.rw / 2), mx0 = g.x0 + g.rw / 2, l0 = gl0, r0 = gr0, tph = tph0, p0 = p00 }
+    -- u0 可选：模拟"鼠标压在哪一点抓起"。不给就按抓取端走（left→左圆、right→右圆、mid→中点），
+    -- 和真机一样——鼠标本来就压在圆上；按中点算会让"鼠标位移方向"从第一帧就判错。
+    local ux = tonumber(u0)
+    if ux == nil then ux = (kind == 'left' and gl0) or (kind == 'right' and gr0) or 0.5 end
+    local mx0 = g.x0 + math.max(0, math.min(1, ux)) * g.rw
+    TL.grab = { kind = kind, t0 = g.t0, t1 = g.t1, base = tl_ov_time(g, mx0), mx0 = mx0, l0 = gl0, r0 = gr0, tph = tph0, p0 = p00 }
     tl_grab_sections(true)
     msg.verbose('时间轴·抓起（取证）' .. tostring(kind))
 end)
@@ -3329,14 +3360,16 @@ local function tl_click(fx, fy, forced_dbl)
     end
 
     -- ② 刻度带：单击跳到该处（吸到帧头），双击回整片
-    if my >= g.y_lab - 2 and my <= g.rl_y + 1 then
+    --    下界要停在"概览圆的顶上"：圆中心在概览行，半径 6 px，圆的上半截在基线以下、
+    --    却仍 <= rl_y+1，于是点圆的上 1/3 会被这里当成"点刻度带"直接跳走 —— 圆看着缺一块点不中。
+    if my >= g.y_lab - 2 and my <= math.min(g.rl_y + 1, g.y_ov - (g.cr or 4) - 2) then
         if dbl then tl_reset('双击刻度带') return end
         seek_frame(g.t0 + (mx - g.x0) / math.max(1, g.rw) * g.span, '点击刻度带')
         return
     end
 
-    -- ③ 概览条（基线下方）：抓起 / 放下
-    if my > g.rl_y + 1 then
+    -- ③ 概览条（基线下方）：抓起 / 放下。上界与 ② 的下界对齐，圆的整个上半截也算概览条
+    if my > math.min(g.rl_y + 1, g.y_ov - (g.cr or 4) - 2) then
         if TL.grab then
             msg.verbose('时间轴·放下（' .. TL.grab.kind .. '）')
             TL.grab = nil
