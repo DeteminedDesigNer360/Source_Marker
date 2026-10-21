@@ -3150,7 +3150,8 @@ local function tl_grab_move(g, mx)
         -- 除了"落在 0.5 附近"的窗口，**跨过 0.5** 也算进入：鼠标快拖时一帧能跨过整个窗口
         -- （0.02 窗口在 0~15 上只有 0.3 s），跨过去就再也回不来，用户看到的是"有概率进不去"。
         local crossed_half = pn ~= nil and gr.pn_prev ~= nil and ((gr.pn_prev - 0.5) * (pn - 0.5) <= 0)
-        if gr.kind ~= 'mid' and pn and (math.abs(pn - 0.5) <= lim or crossed_half) and not gr.sym_block and TL.bar_solve_center then
+        local in_win = pn ~= nil and (math.abs(pn - 0.5) <= lim or crossed_half)
+        if gr.kind ~= 'mid' and in_win and not gr.sym_block and TL.bar_solve_center then
             local hi = math.min(2 * tph, 2 * (g.dur - tph))
             if gr.sym_ready == nil then
                 -- 进入同动的**第一帧**：跨度保持不变，只把中点点到播放头上（跳幅 = |区间中点−播放头|，模式切换的固有最小值）；
@@ -3171,7 +3172,21 @@ local function tl_grab_move(g, mx)
                     gr.sym_ready, gr.sym_off = nil, nil
                 end
             elseif gr.sym_ready then
-                local sp = TL.bar_solve_center(g.dur, tph, target - gr.sym_off, gr.kind)
+                -- 对称解在跨度=hi 处就已经够不到鼠标 ⇒ 用户要的是"更宽"，对称已到极限（那端会贴片头/片尾）。
+                -- bar_solve_center 遇到够不到的目标会 clamp 返回 hi，于是一路 sp=hi ⇒ 区间永远卡在 hi 上
+                -- （0~15@7.5 抓右圆放大就是死在这里）。这种情况要退回单动：贴边那端钉住，这一端跟手继续放大。
+                local want = target - gr.sym_off
+                local gl_h, gr_h = TL.bar_geom(tph - hi / 2, tph + hi / 2, g.dur)
+                local q_at_hi = (gr.kind == 'left') and gl_h or gr_h
+                local beyond_hi = (gr.kind == 'right') and (q_at_hi <= want) or (gr.kind == 'left') and (q_at_hi >= want)
+                local sp
+                if beyond_hi then
+                    -- 先把对称推到极限（贴边那端正好到位），下一帧才退单动 —— 否则会"跳过贴边那一档"，
+                    -- 左端停在半路（实测 3.4 s）而不是 0，用户看到的是对称没走到头就松开了。
+                    if (g.t1 - g.t0) < hi - 1e-6 then sp = hi end
+                else
+                    sp = TL.bar_solve_center(g.dur, tph, want, gr.kind)
+                end
                 -- 对称解已经贴到片头/片尾（sp 触界）就退回单动：否则用户会被“两边一起卡住”锁死
                 -- sp == hi 是合法解（居中且正好贴到片头/片尾）：进入同动那一帧跨度往往就等于 hi，
                 -- 以前写成 sp < hi - 1e-6 会把这一帧判成“触界”，于是刚进去就退回单动 = 区间乱窜
@@ -3186,8 +3201,11 @@ local function tl_grab_move(g, mx)
                     gr.sym_block = true
                 end
             end
-        else
-            -- 播放头离开 p=0.5 的窗口：解锁，下次回到中点还能再进同动
+        elseif gr.sym_block and not in_win then
+            -- 只有播放头**真正离开** p=0.5 的窗口才解锁。以前这里是无条件 else 分支，
+            -- 而 sym_block 为真时上面那个 if 必然为假 ⇒ 同一帧就进这里把锁清掉 ⇒
+            -- 下一帧又重进同动 → 触界 → 解锁 → 再进同动，区间卡在 "hi" 上永远出不来
+            -- （0~15@7.5 抓右圆放大、对称放大到片头触底后继续拖，都是这个死循环）。
             gr.sym_ready, gr.sym_off, gr.sym_block = nil, nil, nil
         end
         gr.sym = (sym ~= nil)
