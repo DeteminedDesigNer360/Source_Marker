@@ -3104,12 +3104,24 @@ local function tl_grab_move(g, mx)
             local anchor = gr.kind == 'right' and gr.l0 or gr.r0
             pa, pb = TL.bar_solve_px(g.dur, anchor, target, gr.kind, wmin)
             if pa and not (pb - pa >= minspan - 1e-9 and pa >= -1e-9 and pb <= g.dur + 1e-9) then
-                -- 反解出的时间越界（贴片头/片尾）：按贴边公式重解 —— 宽度 = 钉住端到片边的像素距离
+                -- 时间越界：先看是**哪一端**出头，再按那一侧的贴边公式重解
+                --   左端出头 ⇒ t0=0，宽度 = 右端的归一化位置（抓右端时右端跟手，否则用抓起时的锚 r0）
+                --   右端出头 ⇒ t1=dur，宽度 = 1 - 左端的归一化位置（抓左端时左端跟手，否则用锚 l0）
                 local pow = tonumber(o.tl_ov_pow) or 1.29
-                local w = gr.kind == 'right' and (1 - anchor) or anchor
-                if w and w > 0 and w <= 1 then
-                    local span = math.max(minspan, math.min(g.dur, (w ^ (1 / pow)) * g.dur))
-                    if gr.kind == 'right' then pa, pb = g.dur - span, g.dur else pa, pb = 0, span end
+                local w
+                if pa < -1e-9 then
+                    w = (gr.kind == 'right') and target or anchor
+                    if w and w > 0 and w <= 1 then
+                        local span = math.max(minspan, math.min(g.dur, (w ^ (1 / pow)) * g.dur))
+                        pa, pb = 0, span
+                    else pa = nil end
+                elseif pb > g.dur + 1e-9 then
+                    local lpos = (gr.kind == 'left') and target or anchor
+                    w = 1 - lpos
+                    if w and w > 0 and w <= 1 then
+                        local span = math.max(minspan, math.min(g.dur, (w ^ (1 / pow)) * g.dur))
+                        pa, pb = g.dur - span, g.dur
+                    else pa = nil end
                 else
                     pa = nil
                 end
