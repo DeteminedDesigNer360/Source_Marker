@@ -3040,7 +3040,12 @@ local function tl_grab_move(g, mx)
         local tph = gr.tph or tonumber(mp.get_property_number('time-pos'))
         local inr = (tph and tph > gr.t0 + 1e-9 and tph < gr.t1 - 1e-9) and true or false
         local span0 = gr.t1 - gr.t0
-        local p0 = gr.p0 or (inr and (tph - gr.t0) / span0 or nil)
+        local p0 = gr.p0 or (inr and (tph - gr.t0) / span0 or nil)   -- 抓起时（tl_place 的 pr 两阶段用它）
+        -- 两阶段判据用**当前区间**算（播放头取抓起时快照 TL.grab.tph，免得播放中漂移）：
+        -- 拖动时区间一直在变，p 会连续地从 0 漂到 0.5，到中点附近就切进“两圆对称”，离开就退回单动。
+        -- 进用 0.02、出用 0.05（迟滞），状态记在 gr.sym —— 这样“拖到一半进入同动”和“退出同动”都成立。
+        local span_cur = math.max(1e-9, g.t1 - g.t0)
+        local pn = (tph and tph > g.t0 + 1e-9 and tph < g.t1 - 1e-9) and (tph - g.t0) / span_cur or nil
         local EPS = 0.02
         -- 按"新跨度 sp 该摆在哪里"落位（越界/最小跨度交给 tl_clamp_range）：
         --   · 播放头在正中 → 两圆对称于播放头（缩、放都对称）
@@ -3078,17 +3083,37 @@ local function tl_grab_move(g, mx)
         -- 播放头落在区间正中（|p0-0.5|<=EPS）：两圆以播放头为轴对称缩放（Pr 两阶段的第一段，
         -- mouse 手感也要保留；不这样做时抓右圆只会缩右边，播放头会被挤到边上）
         local sym
-        if inr and math.abs(p0 - 0.5) <= EPS and TL.bar_solve_center then
+        local lim = gr.sym and 0.05 or EPS
+        if pn and math.abs(pn - 0.5) <= lim and TL.bar_solve_center then
             local sp = TL.bar_solve_center(g.dur, tph, target, gr.kind)
-            if sp and (tph - sp / 2) >= -1e-9 and (tph + sp / 2) <= g.dur + 1e-9 then sym = sp end
+            -- 对称解已经贴到片头/片尾（sp 触界）就退回单动：否则用户会被“两边一起卡住”锁死
+            local hi = math.min(2 * tph, 2 * (g.dur - tph))
+            if sp and sp < hi - 1e-6 and (tph - sp / 2) >= -1e-9 and (tph + sp / 2) <= g.dur + 1e-9 then
+                sym = sp
+            elseif TL.bar_geom then
+                -- 对称已经贴到片头/片尾：退回单动，并把锚点换成**当前**像素，别跳回抓起时的位置
+                gr.l0, gr.r0 = TL.bar_geom(g.t0, g.t1, g.dur)
+            end
         end
+        gr.sym = (sym ~= nil)
         -- tl_ov_pin='px'：抓哪端，另一端就钉在抓起那一刻的像素上（Pr 实测口径），时间随之微调
         local pinpx = TL.bar_solve_px and feel ~= 'pr' and tostring(o.tl_ov_pin or 'px') == 'px' and gr.l0 and gr.r0
         local pa, pb
         if pinpx and (gr.kind == 'left' or gr.kind == 'right') then
             local wmin = (minspan / g.dur) ^ (tonumber(o.tl_ov_pow) or 1.29)
-            pa, pb = TL.bar_solve_px(g.dur, gr.kind == 'right' and gr.l0 or gr.r0, target, gr.kind, wmin)
-            if pa and not (pb - pa >= minspan - 1e-9 and pa >= -1e-9 and pb <= g.dur + 1e-9) then pa = nil end
+            local anchor = gr.kind == 'right' and gr.l0 or gr.r0
+            pa, pb = TL.bar_solve_px(g.dur, anchor, target, gr.kind, wmin)
+            if pa and not (pb - pa >= minspan - 1e-9 and pa >= -1e-9 and pb <= g.dur + 1e-9) then
+                -- 反解出的时间越界（贴片头/片尾）：按贴边公式重解 —— 宽度 = 钉住端到片边的像素距离
+                local pow = tonumber(o.tl_ov_pow) or 1.29
+                local w = gr.kind == 'right' and (1 - anchor) or anchor
+                if w and w > 0 and w <= 1 then
+                    local span = math.max(minspan, math.min(g.dur, (w ^ (1 / pow)) * g.dur))
+                    if gr.kind == 'right' then pa, pb = g.dur - span, g.dur else pa, pb = 0, span end
+                else
+                    pa = nil
+                end
+            end
         end
         if sym then
             n0, n1 = tph - sym / 2, tph + sym / 2
