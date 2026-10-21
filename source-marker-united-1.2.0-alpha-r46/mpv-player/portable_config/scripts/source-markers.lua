@@ -3197,6 +3197,10 @@ local function tl_grab_move(g, mx)
                     -- 同时上锁：同动里 p 恒 0.5，不锁的话下一帧又会“进入同动 → 立刻触界 → 退回”，
                     -- 用户看到的就是区间闪现 + 漂移 + 反复横跳。锁要等播放头真正离开窗口才解。
                     gr.l0, gr.r0 = TL.bar_geom(g.t0, g.t1, g.dur)
+                    -- 对称阶段鼠标与端点是"带偏移"的（gr.sym_off）；退单动后端点改用鼠标的**绝对位置**，
+                    -- 于是同一帧区间会猛地缩回（实测 0~15 直接掉到 0.041~8.873）。把偏移记下来，
+                    -- 单动解沿用"鼠标 + 偏移"，切换那一帧区间就不动。
+                    gr.mx_off = ((gr.kind == 'right') and gr.r0 or gr.l0) - target
                     gr.sym_ready, gr.sym_off = nil, nil
                     gr.sym_block = true
                 end
@@ -3209,6 +3213,7 @@ local function tl_grab_move(g, mx)
             gr.sym_ready, gr.sym_off, gr.sym_block = nil, nil, nil
         end
         gr.sym = (sym ~= nil)
+        if sym then gr.mx_off = nil end                   -- 回到对称：偏移交给 gr.sym_off，别两边都算
         -- tl_ov_pin='px'：抓哪端，另一端就钉在抓起那一刻的像素上（Pr 实测口径），时间随之微调
         local pinpx = TL.bar_solve_px and feel ~= 'pr' and tostring(o.tl_ov_pin or 'px') == 'px' and gr.l0 and gr.r0
         -- Pr 口径：缩小只允许让播放头朝中点靠近。若抓的这一端会让播放头远离中点（上面判的 illegal），
@@ -3228,6 +3233,10 @@ local function tl_grab_move(g, mx)
                 target_eff = gr.l0 + (m0n - mxn)
             end
             target_eff = math.max(0, math.min(1, target_eff))
+        end
+        -- 从对称退回单动时沿用"鼠标 + 偏移"，否则切换那一帧端点会跳到鼠标的绝对位置
+        if gr.mx_off and kind_eff == gr.kind then
+            target_eff = math.max(0, math.min(1, target_eff + gr.mx_off))
         end
         local pa, pb
         if pinpx and (kind_eff == 'left' or kind_eff == 'right') then
