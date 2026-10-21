@@ -4325,6 +4325,23 @@ end
 
 load_ui_state()
 
+-- tl_dbg=file 时启动就打开日志文件。
+-- （以前只在 script-message tl-dbg 里打开 ⇒ 配置里写 tl_dbg=file 会因为 TL.dbg_file 是 nil
+--   而落到 mp.msg.info 分支，一直不出文件，看着像开关没生效。）
+if tostring(o.tl_dbg or 'off') == 'file' then
+    local p = expand('~~home/source-markers-dbg.log')
+    if is_absolute(p) then
+        TL.dbg_file = io.open(p, 'a')
+        if TL.dbg_file then
+            msg.info('调试输出：file -> ' .. p)
+        else
+            msg.warn('调试输出：无法写入 ' .. p)
+        end
+    else
+        msg.warn('调试输出：~~home 不是真实路径，file 模式不可用')
+    end
+end
+
 -- 第 9 条：启动时也按保存的样式校准内置 OSC
 -- （老的 ui.json 没有 style 字段 ⇒ 默认 panel ⇒ 这里把 OSC 打开，与升级前的观感一致）
 apply_osc_for_style()
