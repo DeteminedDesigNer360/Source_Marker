@@ -92,6 +92,7 @@ tl_min_px = 40,            -- 第 9 条：概览条两圆最小间距（像素�
     tl_ov_k = 1.19,            -- 第 9 条：bar 模式中心斜率（u=1/2 处）—— NS4 两轮拟合，深层按 u^0.68 衰减
     tl_ov_pin = 'px',          -- 第 9 条：拖圆缩放的钉住口径 px = 另一端像素不动、该端时间微调（Pr 实测：左端漂 12~16 帧，默认）| time = 另一端时间不动
     tl_hit_px = 13,            -- 第 9 条：概览条两个圆的命中半径（px）；圆直径约 12，放大到 1.1 倍 = 13
+    tl_dbg = 'off',            -- 第 9 条：拖圆取证输出 off | log（mpv 日志）| file（~~/source-markers-dbg.log，每帧一行）
     tl_ov_edge = 'pin',        -- 第 9 条：概览条贴片头/片尾时的映射 pin = 那一端钉死在 0/1（默认，跨过贴边瞬间会跳 6~21 px）| pr = 连续口径（不跳，但贴边那端会漂几 px）
     tl_play_follow = 'pr',     -- 第 9 条：播放跟随 off | pr（播放中不动、暂停追平居中，默认）| page（播到区间尾翻页）| center（始终居中）
 tl_grab_feel = 'mouse',    -- 第 9 条：拖圆缩放手感 mouse（抓哪端动哪端、另一端钉死，默认）| pr（两阶段：缩=远端动、放=被抓端动；跨度缩到 2×(播放头−近端) 以下会改成以播放头对称 ⇒ 钉住端漂移，用户上机否决）
@@ -3078,9 +3079,11 @@ local function tl_grab_move(g, mx)
     local minspan = tl_min_span()
     local n0, n1 = gr.t0, gr.t1
     local pn                                   -- p = 播放头在当前区间里的位置（只有 bar 模式算）
+    local target = 0                           -- 抓手的归一化位置（bar 模式解出来，日志也要用）
+    local dbg = tostring(o.tl_dbg or 'off')     -- 'off' | 'log' | 'file'：取证用，每帧一行
     if (o.tl_ov_map or 'linear') == 'bar' and TL.bar_geom and TL.bar_solve then
         -- 'bar' 模式：抓手的 x 不是"时间尺度"，必须按映射反解（否则画的和点的错位）
-        local target = math.max(0, math.min(1, (mx - g.x0) / math.max(1, g.rw)))
+        target = math.max(0, math.min(1, (mx - g.x0) / math.max(1, g.rw)))
         local feel = tostring(o.tl_grab_feel or 'pr')
         local tph = gr.tph or tonumber(mp.get_property_number('time-pos'))
         local inr = (tph and tph > gr.t0 + 1e-9 and tph < gr.t1 - 1e-9) and true or false
@@ -3132,19 +3135,27 @@ local function tl_grab_move(g, mx)
         -- Pr 口径：播放头在区间内时，“缩小”只允许让播放头朝中点移动。
         -- p<0.5 时右移左圆、p>0.5 时左移右圆都会让播放头远离中点 —— Pr 不允许这种操作，
         -- 而是让“抓的那个圆不动、把另一个圆移过来”，也就是先把播放头拉到 p=0.5 再两圆同动。
-        local illegal = false
+        -- 方向必须看“鼠标相对上一帧往哪动”，不能拿鼠标和当前端点比：
+        -- 同动之后端点被摆到别处，回拖（放大）也会被判成“在缩小”，于是误触发转嫁、区间乱跳。
+        local prev_mx = gr.mx_prev or gr.mx0 or mx
+        local dpx = mx - prev_mx
+        local shrinking = (gr.kind == 'left') and (dpx > 0.5) or (gr.kind == 'right' and dpx < -0.5)
+        local growing = (gr.kind == 'left' and dpx < -0.5) or (gr.kind == 'right' and dpx > 0.5)
+        -- 转嫁一旦生效就**粘滞**到用户反向拖（放大）为止，不再依赖 pn 是否有效：
+        -- 转嫁通常会把被抓端推过播放头，pn 随即变 nil，以前那种写法下一帧就撤销转嫁，
+        -- target_eff 从“镜像值”跳回“鼠标绝对位置”，区间整体瞬移
+        -- （实测 10~30@11 抓左圆：11.018~18.705 一步跳到 22.961~29.943，左圆像被甩到别处）。
+        local illegal = gr.trans and not growing
         if inr and pn and (gr.kind == 'left' or gr.kind == 'right') and TL.bar_geom then
-            -- 方向必须看“鼠标相对上一帧往哪动”，不能拿鼠标和当前端点比：
-            -- 同动之后端点被摆到别处，回拖（放大）也会被判成“在缩小”，于是误触发转嫁、区间乱跳。
-            local prev_mx = gr.mx_prev or gr.mx0 or mx
-            local dpx = mx - prev_mx
-            local shrinking = (gr.kind == 'left') and (dpx > 0.5) or (gr.kind == 'right' and dpx < -0.5)
             if shrinking and ((pn < 0.5 and gr.kind == 'left') or (pn > 0.5 and gr.kind == 'right')) then
                 illegal = true
             end
-            -- 一旦转嫁，本次拖动内保持转嫁语义（钉住被抓端、另一端跟手）：
-            -- 回拖时切回“抓哪端动哪端”，锚点会从“被抓端”换回“另一端”，区间必然跳一下。
-            if gr.trans then illegal = true end
+        end
+        -- 真正退出转嫁的那一帧：锚点换成当前像素、并记下“端点 − 鼠标”的偏移，
+        -- 单动从当前位置继续跟手，否则切回单动时端点会跳到抓起时的老位置。
+        if gr.trans and growing and TL.bar_geom then
+            gr.l0, gr.r0 = TL.bar_geom(g.t0, g.t1, g.dur)
+            gr.mx_off = ((gr.kind == 'right') and gr.r0 or gr.l0) - target
         end
         -- 抓中段（mid）永远是整体平移：播放头在区间正中时也让 mid 进对称的话，横轴就拖不动了
         -- 除了"落在 0.5 附近"的窗口，**跨过 0.5** 也算进入：鼠标快拖时一帧能跨过整个窗口
@@ -3298,6 +3309,21 @@ local function tl_grab_move(g, mx)
             if n0 < 0 then n1, n0 = n1 - n0, 0 end
             if n1 > g.dur then n0, n1 = n0 - (n1 - g.dur), g.dur end
         end
+        -- 取证：每帧一行，关键判定全带上（tl_dbg=log 走 mpv 日志 / file 追加到 home 下 txt）
+        if dbg ~= 'off' then
+            local s = string.format(
+                'tlgrab k=%s ke=%s tr=%s sym=%s sr=%s blk=%s inr=%s pn=%s mx=%.1f tg=%.4f te=%.4f l0=%s r0=%s mxo=%s soff=%s pa=%s pb=%s n=%.3f,%.3f',
+                tostring(gr.kind), tostring(kind_eff), tostring(gr.trans), tostring(sym ~= nil), tostring(gr.sym_ready),
+                tostring(gr.sym_block), tostring(inr), pn and string.format('%.4f', pn) or 'nil', mx, target, target_eff,
+                gr.l0 and string.format('%.4f', gr.l0) or 'nil', gr.r0 and string.format('%.4f', gr.r0) or 'nil',
+                gr.mx_off and string.format('%.4f', gr.mx_off) or 'nil', gr.sym_off and string.format('%.4f', gr.sym_off) or 'nil',
+                pa and string.format('%.3f', pa) or 'nil', pb and string.format('%.3f', pb) or 'nil', n0, n1)
+            if dbg == 'file' and TL.dbg_file then
+                TL.dbg_file:write(s .. '\n'); TL.dbg_file:flush()
+            else
+                mp.msg.info(s)
+            end
+        end
     else
         local at = tl_ov_time(g, mx)
         if gr.kind == 'left' then
@@ -3348,6 +3374,24 @@ mp.register_script_message('tl-grab', function(kind, u0)
     TL.grab = { kind = kind, t0 = g.t0, t1 = g.t1, base = tl_ov_time(g, mx0), mx0 = mx0, l0 = gl0, r0 = gr0, tph = tph0, p0 = p00 }
     tl_grab_sections(true)
     msg.verbose('时间轴·抓起（取证）' .. tostring(kind))
+end)
+-- 取证开关：script-message tl-dbg log|file|off（file 写到 ~~/source-markers-dbg.log）
+mp.register_script_message('tl-dbg', function(v)
+    local mode = tostring(v or 'off')
+    if mode ~= 'log' and mode ~= 'file' then mode = 'off' end
+    o.tl_dbg = mode
+    if mode == 'file' and not TL.dbg_file then
+        local p = expand('~~home/source-markers-dbg.log')
+        if is_absolute(p) then TL.dbg_file = io.open(p, 'a') end
+    end
+    if mode ~= 'file' and TL.dbg_file then TL.dbg_file:close(); TL.dbg_file = nil end
+    msg.info('调试输出：' .. mode)
+end)
+-- 在日志里打一条分隔标记（分段跑探针时用）
+mp.register_script_message('tl-dbg-mark', function(tag)
+    local s = 'tlgrab ---- ' .. tostring(tag or '') .. ' ----'
+    if o.tl_dbg == 'file' and TL.dbg_file then TL.dbg_file:write(s .. '\n'); TL.dbg_file:flush()
+    else mp.msg.info(s) end
 end)
 mp.register_script_message('tl-drag-n', function(u)
     local g = TL.geo
