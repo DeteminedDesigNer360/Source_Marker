@@ -2277,7 +2277,11 @@ local function tl_metrics()
     -- 这样"最底下那条横线"永远真的落在它该在的地方（刻度基线 / 概览条在最底部）
     local pad     = math.max(5, math.floor(6 * s + 0.5))
     local tc_sz   = math.max(10, math.floor(11 * s + 0.5))
-    local ov_h    = math.max(6, math.floor(7 * s + 0.5))
+    -- 圆的**视觉**半径：poly 半径 cr + 1（外圈）+ 1（描边）＝ cr+2。
+    -- Pr 的构造是"轨道高度 = 圆的直径、圆与轨道上下沿相切"，概览行必须容得下整个圆，
+    -- 所以 ov_h 和轨道高都按视觉半径算（以前按 7*s 算，圆比轨道高一半，超出轨道的部分点不到）。
+    local crv     = math.max(3, math.floor(3.6 * s + 0.5)) + 2
+    local ov_h    = math.max(6, math.floor(7 * s + 0.5), 2 * crv + 2)
     local lab_sz  = math.max(9, tc_sz - 2)
     local mh      = math.max(5, math.floor(7 * s + 0.5))
     local tick_h  = math.max(3, math.floor(5 * s + 0.5))
@@ -2287,7 +2291,7 @@ local function tl_metrics()
     local x = math.max(8, math.floor((w - width) / 2))
     local y = math.max(8, bm.y - height - math.floor(6 * s + 0.5))
     return { w = w, h = h, scale = s, x = x, y = y, width = width, height = height,
-             pad = pad, tc_sz = tc_sz, ov_h = ov_h, lab_sz = lab_sz, mh = mh,
+             pad = pad, tc_sz = tc_sz, ov_h = ov_h, cr = crv, lab_sz = lab_sz, mh = mh,
              tick_h = tick_h, tick_h2 = tick_h2, gap = gap,
              mw = math.max(5, math.floor(6 * s + 0.5)),                     -- 播放头头型宽
              mw_mk = math.max(4, math.floor(5 * s + 0.5)) }                 -- 标记头型宽（Pr 里标记比播放头瘦一点）
@@ -2351,7 +2355,9 @@ local function render_timeline()
     -- ② 概览 ⚪==⚪（在刻度基线**下面**）：深色轨道 = 整片可滑动范围，亮段 = 当前可见范围，两端各一个圆
     --    tl_ov_map=sqrt 用 Pr 那种压缩映射（亮段比真实比例长 = 极小区间也抓得住，代价是"看到的长度"不真实）
     local ov_mid = row_ov + math.floor(ov_h / 2)
-    local ov_track_h = math.max(3, math.floor(4 * s + 0.5))
+    -- Pr 的构造：轨道高度 = 圆的直径（圆与轨道上下沿相切），亮段是与轨道同高的矩形
+    local crv = m.cr or (math.max(3, math.floor(3.6 * s + 0.5)) + 2)
+    local ov_track_h = math.max(3, 2 * crv)
     lines[#lines + 1] = rect_line(x0, ov_mid - math.floor(ov_track_h / 2), rw, ov_track_h, '&H141414&', '00')
     local function ov_frac(f)
         f = math.max(0, math.min(1, f))
@@ -2370,7 +2376,8 @@ local function render_timeline()
     end
     local cr = math.max(3, math.floor(3.6 * s + 0.5))
     local grk = (TL.grab and TL.grab.kind) or ''      -- 抓取中：对应抓手画亮（r46）
-    lines[#lines + 1] = rect_line(math.floor(wx0), ov_mid - 1, math.max(1, math.floor(wx1 - wx0)), 2,
+    lines[#lines + 1] = rect_line(math.floor(wx0), ov_mid - math.floor(ov_track_h / 2),
+        math.max(1, math.floor(wx1 - wx0)), ov_track_h,
         (grk == 'mid') and '&HFFFFFF&' or '&HD0D0D0&', '0')
     for i, xc in ipairs({ wx0, wx1 }) do
         local hot = (grk == ((i == 1) and 'left' or 'right'))
@@ -2544,7 +2551,7 @@ local function render_timeline()
         TL.place({
             x0 = x0, x1 = x1, rw = rw, t0 = t0, t1 = t1, span = span, dur = dur, fps = fps,
             y_tc = row_tc, h_tc = tc_sz, y_lab = row_lab, rl_y = rl_y,
-            y_ov = row_ov, h_ov = ov_h, w_l = wl, w_r = wr, wx0 = wx0, wx1 = wx1, cr = cr,
+            y_ov = row_ov, h_ov = ov_h, w_l = wl, w_r = wr, wx0 = wx0, wx1 = wx1, cr = crv,
         })
     end
     -- 中间量打进日志（位置类问题只能靠它精确定位，别靠肉眼数像素）
@@ -3463,7 +3470,18 @@ end)
 TL.place = function(g)
     TL.geo = g
     if g then
-        mp.set_mouse_area(g.x0 - 2, g.y_tc - 2, g.x1 + 4, g.y_ov + g.h_ov + 2, TL_SEC)
+        -- 可点区域要从画布左右各扩出一个圆的半径：区间贴片头/片尾时圆有一半落在画布外，
+        -- 以前只扩 2 px，圆外侧那一半点不到（用户实测"超出轨道深色条的圆的部分点不了"）。
+        local crv = g.cr or 4
+        local hitr = math.max(tonumber(o.tl_hit_px) or 13, crv + 6)
+        -- 第 3 参写"右边界"而不是"宽度"：mpv 的 set_mouse_area 各版本对这两者理解不一，
+        -- 传 x + 宽 时两种理解都能覆盖到全宽（宽度理解 → 更宽、被窗口裁掉；边界理解 → 正好）。
+        -- 之前传"宽度"导致右侧只覆盖到 x0+宽 处，右圆右侧 30 px 内点不到（用户实测）。
+        -- 左右各留 2*hitr：贴边圆的命中框本来就放大一倍（hrl/hrr = hitr*2），
+        -- 可点区域必须跟着放宽，否则"命中判定允许、事件到不了"（用户实测右圆右侧点不到）。
+        local pad = 2 * hitr + 4
+        local xa = math.max(0, g.x0 - pad)
+        mp.set_mouse_area(xa, g.y_tc - 2, xa + g.rw + 2 * pad, g.y_ov + g.h_ov + 2, TL_SEC)
         mp.commandv('enable-section', TL_SEC)
     else
         mp.set_mouse_area(0, 0, 0, 0, TL_SEC)
