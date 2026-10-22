@@ -80,8 +80,9 @@ local o = {
     bar_tooltip = false,       -- 第 8 条：鼠标悬停时在按钮上方显示按钮名（默认关）
     tl = true,                 -- 第 9 条：Pr 风格下是否显示那条可缩放时间轴（默认开）
     tl_scale = 2.0,            -- 第 9 条：时间轴自己的缩放因子（Pr 里时间轴高度 ≈ 控制栏的 2~3 倍）
-    tl_min_frames = 15,        -- 第 9 条：时间轴最小跨度（帧）——滚轮最多放大到这么多帧
-tl_min_px = 40,            -- 第 9 条：概览条两圆最小间距（像素，Pr 实测约 40）——长片上按它抬高最小跨度
+    tl_min_frames = 40,        -- 第 9 条：时间轴最小跨度（帧）——滚轮最多放大到这么多帧（r47：40 f ≈ Pr 实测 43 f）
+    tl_min_mode = 'frames',    -- 第 9 条：最小跨度口径 frames = 只按帧（与片长无关，Pr 实测，默认）| px = 旧行为（用 tl_min_px 抬高，随片长线性放大）
+    tl_min_px = 40,            -- 第 9 条：仅 tl_min_mode=px 时生效 —— 概览条两圆最小间距（像素）
     tl_zoom_steps = '1.003,1.001,1.01',  -- 第 9 条：滚轮缩放步长（普通,Ctrl细,Shift粗）——用户实测手感值
     tl_zoom_anchor = 'snap',   -- 第 9 条：缩放锚点 snap = 缩放后播放头落在区间正中（Pr NS1 实测定论，默认）| head = 死钉播放头 | center = 钉区间中心 | pr = 每档拉向中心
     tl_zoom_pull = 0.585,      -- 第 9 条：pr 的拉力 —— Pr 实测"每 ×2 一步把离中心的偏移乘 2/3"，即 pull = -log2(2/3)
@@ -90,6 +91,8 @@ tl_min_px = 40,            -- 第 9 条：概览条两圆最小间距（像素�
     tl_ov_map = 'bar',         -- 第 9 条：概览条映射 linear | sqrt | pow | bar（bar = Pr 实测形态，默认）
     tl_ov_pow = 1.30,          -- 第 9 条：亮段宽 = u^pow —— 三轮实测 1.29~1.31，取 1.30
     tl_ov_k = 1.19,            -- 第 9 条：bar 模式中心斜率（u=1/2 处）—— NS4 两轮拟合，深层按 u^0.68 衰减
+    tl_ov_min_px = 0,          -- 第 9 条 r47：概览条亮段的最小**视觉**宽度（px，0 = 用 2*圆半径+2，即两环刚好相切）；
+                               --   只影响绘制，不影响反解/命中（1 h 素材 40 f 的真实宽度只有 0.0003 px）
     tl_ov_pin = 'px',          -- 第 9 条：拖圆缩放的钉住口径 px = 另一端像素不动、该端时间微调（Pr 实测：左端漂 12~16 帧，默认）| time = 另一端时间不动
     tl_hit_px = 13,            -- 第 9 条：概览条两个圆的命中半径（px）；圆直径约 12，放大到 1.1 倍 = 13
     tl_dbg = 'off',            -- 第 9 条：拖圆取证输出 off | log（mpv 日志）| file（~~/source-markers-dbg.log，每帧一行）
@@ -2379,6 +2382,17 @@ local function render_timeline()
         wx1 = x0 + ov_frac(t1 / dur) * rw
     end
     local cr = math.max(3, math.floor(3.6 * s + 0.5))
+    -- r47：极小跨度下亮段会缩到 0 px（1 h 素材缩到 40 f 时真实宽度 ≈ 0.0003 px，整段看不见），
+    -- 这里只做**视觉下限**：撑到"两环刚好相切"（2*cr+2，与 Pr 实测的 22 px 下限同口径）。
+    -- 反解（bar_solve / bar_solve_px）与命中仍用真实 bar_geom 的结果，所以拖动精度不受影响。
+    local ov_min_px = tonumber(o.tl_ov_min_px) or 0
+    if ov_min_px <= 0 then ov_min_px = 2 * cr + 2 end
+    if wx1 - wx0 < ov_min_px then
+        local mid = (wx0 + wx1) / 2
+        wx0, wx1 = mid - ov_min_px / 2, mid + ov_min_px / 2
+        if wx0 < x0 then wx0, wx1 = x0, x0 + ov_min_px end
+        if wx1 > x0 + rw then wx0, wx1 = x0 + rw - ov_min_px, x0 + rw end
+    end
     local grk = (TL.grab and TL.grab.kind) or ''      -- 抓取中：对应抓手画亮（r46）
     lines[#lines + 1] = rect_line(math.floor(wx0), ov_mid - math.floor(ov_track_h / 2),
         math.max(1, math.floor(wx1 - wx0)), ov_track_h,
@@ -2585,7 +2599,8 @@ end
 --   · 单滚 = 中步长；Ctrl+滚轮 = 细；Shift+滚轮 = 粗
 --   · Alt+滚轮 = 左右平移，Shift+Alt+滚轮 = 粗平移；Ctrl+Alt+滚轮 不占用（留给用户/mpv）
 --   · 键盘默认 Alt+= / Alt+- / Alt+0（keys.conf 可改）
---   · 最小跨度 = tl_min_frames 帧（默认 15 帧：Pr 实测也是十几帧，一帧一格不是给人用的）
+--   · 最小跨度 = tl_min_frames 帧（r47 起默认 40 帧：Pr 实测缩到最短的可视范围约 43 帧，
+--     且与片长无关；tl_min_mode='px' 可切回旧的"按概览条 40 px 反推"口径）
 --   · 范围跨重启记住 —— 但只记"同一个文件"的（ui.json 里 tl_file / tl_t0 / tl_t1）
 local function tl_init()      -- 整块塞进一个函数：Lua 5.1 主块最多 200 个 local，这个文件已经很挤
 -- 步长（用户实测反馈：原来 ×1.5/×1.12/×2.5 整体偏粗，Ctrl 的手感已经像 Pr 的 Shift ⇒ 全部调细）；
@@ -2601,15 +2616,21 @@ do
 end
 
 local function tl_min_span()
-    local fr = tonumber(o.tl_min_frames) or 15
+    local fr = tonumber(o.tl_min_frames) or 40
     if fr < 1 then fr = 1 end
     local s = fr / (get_fps() or 25)
-    -- Pr 的概览条两圆最小间距约 40 px；长片上"15 帧"会窄到抓不住（亮段宽 w = u^pow）
-    local g, dur = TL.geo, mp.get_property_number('duration')
-    if (o.tl_ov_map or 'linear') == 'bar' and g and g.rw and g.rw > 0 and dur and dur > 0 then
-        local pow = tonumber(o.tl_ov_pow) or 1.30
-        local u = (tonumber(o.tl_min_px) or 40) / g.rw
-        if u > 0 and u < 1 then s = math.max(s, dur * u ^ (1 / pow)) end
+    -- r47：默认只按帧（与片长无关）。Pr 实测（测量-Pr概览条与最小可视范围.md）：
+    --   30 s 素材缩到最短 = 1.447 s 可视范围（43.4 帧）、60 min 素材 = 6.17 s（148 帧）
+    --   ⇒ 能缩多细与片长无关；旧做法用概览条 40 px 反推，会得到恒定 8.07% 片长
+    --   （1 h → 290 s / 8714 帧），这正是"1 h 素材只能到 5 min"的根因。
+    -- tl_min_mode='px' 保留旧口径做对照 / 回退。
+    if (o.tl_min_mode or 'frames') == 'px' then
+        local g, dur = TL.geo, mp.get_property_number('duration')
+        if (o.tl_ov_map or 'linear') == 'bar' and g and g.rw and g.rw > 0 and dur and dur > 0 then
+            local pow = tonumber(o.tl_ov_pow) or 1.30
+            local u = (tonumber(o.tl_min_px) or 40) / g.rw
+            if u > 0 and u < 1 then s = math.max(s, dur * u ^ (1 / pow)) end
+        end
     end
     return s
 end
@@ -4663,6 +4684,13 @@ mp.register_script_message('tl', function(a, b)
     end
     render_timeline()
 end)
+-- 第 9 条 r47：**带夹取**的设范围钩子 —— 走 tl_set_range 真实路径（最小跨度 / 片头片尾夹取），
+-- 用于验证"能缩多细"。老的 'tl' 钩子故意不夹取，方便探针摆极端状态（历史探针依赖这一点）。
+mp.register_script_message('tl-set', function(a, b)
+    local t0, t1 = tonumber(a), tonumber(b)
+    if not (t0 and t1 and t1 >= t0) then return end
+    if TL.set_range then TL.set_range(t0, t1, '探针', false) end
+end)
 mp.register_script_message('state', function()
     print(json_encode({
         sidecar_enabled = o.sidecar,
@@ -4679,7 +4707,8 @@ mp.register_script_message('state', function()
         hide_sidecar = o.hide_sidecar,
         input = input and 'mp.input' or 'fallback',
         tl_t0 = TL.t0, tl_t1 = TL.t1, tl_file = TL.cur_file,
-        tl_min_frames = tonumber(o.tl_min_frames) or 15,
+        tl_min_frames = tonumber(o.tl_min_frames) or 40,
+        tl_min_mode = o.tl_min_mode,
         tl_zoom_anchor = o.tl_zoom_anchor, tl_zoom_pull = o.tl_zoom_pull,
         tl_ov_map = o.tl_ov_map, tl_ov_pow = o.tl_ov_pow, tl_ov_k = o.tl_ov_k, tl_ov_pin = o.tl_ov_pin, tl_ov_edge = o.tl_ov_edge, tl_hit_px = o.tl_hit_px,
         tl_play_follow = o.tl_play_follow,
