@@ -91,10 +91,12 @@ local o = {
     tl_ov_map = 'bar',         -- 第 9 条：概览条映射 linear | sqrt | pow | bar（bar = Pr 实测形态，默认）
     tl_ov_pow = 1.30,          -- 第 9 条：亮段宽 = u^pow —— 三轮实测 1.29~1.31，取 1.30
     tl_ov_k = 1.19,            -- 第 9 条：bar 模式中心斜率（u=1/2 处）—— NS4 两轮拟合，深层按 u^0.68 衰减
-    tl_ov_min_px = 0,          -- 第 9 条 r47：概览条亮段的最小**视觉**宽度（px，0 = 用 2*圆半径+2，即两环刚好相切）；
-                               --   只影响绘制，不影响反解/命中（1 h 素材 40 f 的真实宽度只有 0.0003 px）
+    tl_ov_min_px = 26,         -- 第 9 条 r47：概览条亮段的最小**视觉**宽度（px）。Pr 实测最小 22 px（环直径 10 px 时），
+                               --   mpv 的环直径 13 px ⇒ 等比例 22*13/10 ≈ 26；0 = 退回 2*圆半径+2（两环刚好相切）。
+                               --   只影响绘制，不影响反解（1 h 素材 40 f 的真实宽度只有 0.0003 px）
     tl_ov_pin = 'px',          -- 第 9 条：拖圆缩放的钉住口径 px = 另一端像素不动、该端时间微调（Pr 实测：左端漂 12~16 帧，默认）| time = 另一端时间不动
-    tl_hit_px = 13,            -- 第 9 条：概览条两个圆的命中半径（px）；圆直径约 12，放大到 1.1 倍 = 13
+    tl_hit_px = 0,             -- 第 9 条：概览条两个圆的命中半径（px）。0 = 用**视觉**半径（圆半径 + 描边 2），
+                               --   与看到的圆一样大；>0 时以它为准（老口径 13 是"放大 1.1 倍"，会抢走中间横条）
     tl_dbg = 'off',            -- 第 9 条：拖圆取证输出 off | log（mpv 日志）| file（~~/source-markers-dbg.log，每帧一行）
     tl_ov_edge = 'pin',        -- 第 9 条：概览条贴片头/片尾时的映射 pin = 那一端钉死在 0/1（默认，跨过贴边瞬间会跳 6~21 px）| pr = 连续口径（不跳，但贴边那端会漂几 px）
     tl_play_follow = 'pr',     -- 第 9 条：播放跟随 off | pr（播放中不动、暂停追平居中，默认）| page（播到区间尾翻页）| center（始终居中）
@@ -2387,8 +2389,10 @@ local function render_timeline()
     -- Pr 的构造：轨道高度 = 圆的直径（圆与轨道上下沿相切），亮段是与轨道同高的矩形
     local crv = m.cr or (math.max(3, math.floor(3.6 * s + 0.5)) + 2)
     local ov_track_h = math.max(3, 2 * crv)
-    -- 非激活轨道：Pr 标准色 0x313131（以前是 0x141414，比 Pr 暗一档）
-    lines[#lines + 1] = rect_line(x0, ov_mid - math.floor(ov_track_h / 2), rw, ov_track_h, '&H313131&', '00')
+    -- 非激活轨道：Pr 实测 0x1D1D1D（16 倍放大截图逐像素量出来的区间外底色）
+    -- 透明度：Pr 的深灰是画在它自己的深色 UI 上；mpv 是浮在视频上，全不透明会挡画面，
+    -- 所以两层都带一点 alpha（'00' = 不透明、'FF' = 全透明，这里约 75% / 88% 不透明）。
+    lines[#lines + 1] = rect_line(x0, ov_mid - math.floor(ov_track_h / 2), rw, ov_track_h, '&H1D1D1D&', '40')
     local function ov_frac(f)
         f = math.max(0, math.min(1, f))
         local mode = o.tl_ov_map or 'linear'
@@ -2408,8 +2412,11 @@ local function render_timeline()
     -- r47：极小跨度下亮段会缩到 0 px（1 h 素材缩到 40 f 时真实宽度 ≈ 0.0003 px，整段看不见），
     -- 这里只做**视觉下限**：撑到"两环刚好相切"（2*cr+2，与 Pr 实测的 22 px 下限同口径）。
     -- 反解（bar_solve / bar_solve_px）与命中仍用真实 bar_geom 的结果，所以拖动精度不受影响。
-    local ov_min_px = tonumber(o.tl_ov_min_px) or 0
+    -- r47 对齐 Pr：下限取"两环相切"（2*cr+2）与 tl_ov_min_px（默认 26）的较大者，
+    -- 这样最小跨度下两环之间仍留出中间横条（26 - 2*cr ≈ 14 px），点得中。
+    local ov_min_px = tonumber(o.tl_ov_min_px) or 26
     if ov_min_px <= 0 then ov_min_px = 2 * cr + 2 end
+    ov_min_px = math.max(ov_min_px, 2 * cr + 2)
     if wx1 - wx0 < ov_min_px then
         local mid = (wx0 + wx1) / 2
         wx0, wx1 = mid - ov_min_px / 2, mid + ov_min_px / 2
@@ -2419,18 +2426,18 @@ local function render_timeline()
     local grk = (TL.grab and TL.grab.kind) or ''      -- 抓取中：对应抓手画亮（r46）
     lines[#lines + 1] = rect_line(math.floor(wx0), ov_mid - math.floor(ov_track_h / 2),
         math.max(1, math.floor(wx1 - wx0)), ov_track_h,
-        (grk == 'mid') and '&HFFFFFF&' or '&HD0D0D0&', '0')
+        (grk == 'mid') and '&H8A8A8A&' or '&H313131&', (grk == 'mid') and '00' or '28')
     for i, xc in ipairs({ wx0, wx1 }) do
         local hot = (grk == ((i == 1) and 'left' or 'right'))
         local cx = math.floor(xc)
         local r = hot and (cr + 2) or cr
-        lines[#lines + 1] = poly_line(cx - r - 1, ov_mid - r - 1, (r + 1) / 10, '&H101010&', '40',
-            circle_pts(10, 10, 10))
-        -- Pr 的抓手是**空心环**（外圈亮环 + 中心挖空成比轨道更暗的圆），不是实心圆盘：
-        -- 实测 Pr 截图像素：环 0x8A8A8A、环心 0x1D1D1D、条 0x313131；抓取/hover 时环变纯白并放大 2 px
+        -- Pr 的抓手只有**两层**（16 倍放大截图逐像素量）：亮环 0x8A8A8A + 中心挖空的暗圆 0x1D1D1D，
+        -- 外面没有描边/发光那一圈（以前多画了一层 0x101010 外发光，放大看是"三层"）。
+        -- 抓取/hover 时只把环变纯白并放大 2 px，其余不变。
         lines[#lines + 1] = poly_line(cx - r, ov_mid - r, r / 10, hot and '&HFFFFFF&' or '&H8A8A8A&', '00',
             circle_pts(10, 10, 10))
-        local ring = math.max(2, math.floor(cr * 0.34 + 1.0))     -- 环厚：约为半径的 1/3
+        -- 环厚：Pr 实测"亮环 1.5 px / 直径 10 px" ⇒ 约半径的 1/4（以前 1/3，放大看环偏厚、心偏小）
+        local ring = math.max(1, math.floor(cr * 0.25 + 0.9))
         local rr = r - ring
         if rr >= 1 then
             lines[#lines + 1] = poly_line(cx - rr, ov_mid - rr, rr / 10, '&H1D1D1D&', '00',
@@ -3095,11 +3102,12 @@ local function tl_grab_start(g, mx)
     local kind = 'mid'
     -- 圆直径约 12 px，命中半径放大到 1.1 倍（tl_hit_px），圆看着抓不住的问题就解决了
     -- 圆半径随窗口缩放走（cr = 3.6*s），大窗口上圆更大，命中半径要跟着长，否则圆的左右边缘点不中
-    local hitr = math.max(tonumber(o.tl_hit_px) or 13, (g.cr or 4) + 6)
-    -- 圆贴到画布边缘时，外侧那一半在窗口外根本点不到（命中框看着变小）；把内侧补一倍，
-    -- 让贴边圆的可点宽度和中间的圆一样。取更近的那个目标，否则两端各补一倍会互相抢。
-    local hrl = ((g.wx0 - g.x0) < hitr) and hitr * 2 or hitr
-    local hrr = (((g.x0 + g.rw) - g.wx1) < hitr) and hitr * 2 or hitr
+    -- r47：命中半径回到**视觉尺寸**（圆半径 cr + 描边 2），与眼睛看到的一样大。
+    -- 老的"放大到 13 px + 贴边再补一倍"是把中间横条也吃掉的主要来源：最小跨度下亮段只有 26 px，
+    -- 两端各占 13 px 就一点不剩 ⇒ 中间的圆拖不动。现在下限 26 px 已留出约 14 px 空隙，不必再抢。
+    local hitr = tonumber(o.tl_hit_px) or 0
+    if hitr <= 0 then hitr = (g.cr or 4) + 2 end
+    local hrl, hrr = hitr, hitr
     local dl = math.abs(mx - g.wx0)
     local dr = math.abs(mx - g.wx1)
     if dl <= hrl and dl <= dr then kind = 'left'
@@ -3610,13 +3618,14 @@ TL.place = function(g)
         -- 可点区域要从画布左右各扩出一个圆的半径：区间贴片头/片尾时圆有一半落在画布外，
         -- 以前只扩 2 px，圆外侧那一半点不到（用户实测"超出轨道深色条的圆的部分点不了"）。
         local crv = g.cr or 4
-        local hitr = math.max(tonumber(o.tl_hit_px) or 13, crv + 6)
+        -- r47：与 tl_grab_start 同一个口径（视觉半径），两处不一致会出现"判定允许但事件到不了"
+        local hitr = tonumber(o.tl_hit_px) or 0
+        if hitr <= 0 then hitr = crv + 2 end
         -- 第 3 参写"右边界"而不是"宽度"：mpv 的 set_mouse_area 各版本对这两者理解不一，
         -- 传 x + 宽 时两种理解都能覆盖到全宽（宽度理解 → 更宽、被窗口裁掉；边界理解 → 正好）。
         -- 之前传"宽度"导致右侧只覆盖到 x0+宽 处，右圆右侧 30 px 内点不到（用户实测）。
-        -- 左右各留 2*hitr：贴边圆的命中框本来就放大一倍（hrl/hrr = hitr*2），
-        -- 可点区域必须跟着放宽，否则"命中判定允许、事件到不了"（用户实测右圆右侧点不到）。
-        local pad = 2 * hitr + 4
+        -- 左右各留 hitr + 4：贴边那个圆有一半落在画布外，可点区域要把它包进来。
+        local pad = hitr + 4
         local xa = math.max(0, g.x0 - pad)
         mp.set_mouse_area(xa, g.y_tc - 2, xa + g.rw + 2 * pad, g.y_ov + g.h_ov + 2, TL_SEC)
         mp.commandv('enable-section', TL_SEC)
