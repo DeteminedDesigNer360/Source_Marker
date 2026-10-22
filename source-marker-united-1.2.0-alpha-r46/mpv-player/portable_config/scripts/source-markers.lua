@@ -92,9 +92,10 @@ local o = {
     tl_ov_pow = 'auto',        -- 第 9 条：亮段宽 = u^pow。'auto' = 按片长自适应（Pr 实测：30 s→1.33、60 min→0.478，
                                --   log10 插值）；填数字则固定用该值（老口径 1.30 只能对照，1 h 素材会撑出"漂移"）
     tl_ov_k = 1.19,            -- 第 9 条：bar 模式中心斜率（u=1/2 处）—— NS4 两轮拟合，深层按 u^0.68 衰减
-    tl_ov_min_px = 0,          -- 第 9 条 r47：概览条亮段的**兜底**最小视觉宽度（px）；0 = 2*圆半径+4（两环相切 + 4 px 空隙）。
-                               --   只在映射结果真的画不出来时才撑开 —— 撑开会把环推到真实映射里不存在的位置，
-                               --   拖动就"漂"（用户 m04083）。正常片长/窗口下映射本身已够宽，不触发。
+    tl_ov_min_px = 26,         -- 第 9 条 r47：最小跨度时概览条亮段的**目标**宽度（px，含两环）—— 按 Pr 口径定：
+                               --   Pr 最小 31 px = 2×10 圆 + 11 px 横条 ⇒ 我方环径 13 ⇒ 目标 26 px（中间横条 13 px）。
+                               --   宽度指数由它反推（见 TL.bar_pow），所以最小档是真实映射、不用撑开、拖圆不漂。
+                               --   同时兼作兜底下限：映射真的画不到这么宽时才会撑开。0 = 自动（2*圆半径+4）。
     tl_ov_pin = 'px',          -- 第 9 条：拖圆缩放的钉住口径 px = 另一端像素不动、该端时间微调（Pr 实测：左端漂 12~16 帧，默认）| time = 另一端时间不动
     tl_hit_px = 0,             -- 第 9 条：概览条两个圆的命中半径（px）。0 = 用**视觉**半径（圆半径 + 描边 2），
                                --   与看到的圆一样大；>0 时以它为准（老口径 13 是"放大 1.1 倍"，会抢走中间横条）
@@ -2957,14 +2958,27 @@ TL.bar_k = function(u)
     return 1 + (k5 - 1) * math.min(1, u / 0.5) ^ 0.68
 end
 
--- 条宽曲线的指数**随片长变**（Pr 实测两点：30 s 素材 b≈1.33、60 min 素材 b=0.478，
--- 按 log10(片长) 线性插值，夹在 [0.42, 1.40]）。老口径固定 1.30 是早期误拟合 ——
--- 第 28 轮实测 60 min 五档是 0.468~0.492。用固定 1.30 时 1 h 素材只要跨度 <200 s 条宽就掉到视觉下限以下，
--- 靠"撑开"硬画 ⇒ 环被推到自己真实映射里不存在的位置，一抓就漂（用户 m04083）。
+-- 条宽曲线的指数：**反推**，让"最小跨度"正好画成 tl_ov_min_px 那么宽
+-- （w = u^pow，令 u = minspan/dur 时 w·rw = W ⇒ pow = ln(W/rw) / ln(minspan/dur)）。
+-- 这样最小档就是真实映射的结果，不需要"撑开"，环不会被推到映射外 ⇒ 拖圆不漂（用户 m04083/m04194）。
+-- 副产品：pow 自动随片长变（30 s ≈1.24、60 min ≈0.47），与 Pr 实测两点（1.33 / 0.478）几乎重合。
+-- 反推不成立时（rw 未知、片长接近最小跨度、越界）回退到按 log10(片长) 插值的老口径。
 TL.bar_pow = function(dur)
     local p = tonumber(o.tl_ov_pow)
     if p and p > 0 then return p end                       -- 显式数字 = 固定值（老口径/对照用）
     local d = math.max(1, tonumber(dur) or 1)
+    local g = TL.geo
+    local rw = g and tonumber(g.rw) or 0
+    local W = tonumber(o.tl_ov_min_px) or 0
+    if W <= 0 then W = 2 * ((g and tonumber(g.cr)) or 6) + 2 end
+    local ms = tl_min_span()
+    if rw > 0 and W > 0 and ms > 1e-6 and ms < d * 0.999 then
+        local u, w = ms / d, W / rw
+        if u > 1e-9 and u < 1 and w > 0 and w < 1 then
+            local v = math.log(w) / math.log(u)
+            if v >= 0.30 and v <= 1.40 then return v end
+        end
+    end
     local v = 1.33 - 0.4096 * (math.log(d) / math.log(10) - 1.477)
     if v < 0.42 then v = 0.42 elseif v > 1.40 then v = 1.40 end
     return v
