@@ -3088,6 +3088,12 @@ TL.bar_solve_px = function(dur, anchor, target, side, minw, edge)
     local pow = TL.bar_pow(dur)          -- 必须与绘制同一口径，否则反解与画面错位（= 漂移）
     local a, b
     if side == 'right' then a, b = anchor, target else a, b = target, anchor end
+    -- 鼠标被拖出概览条的 x 范围时，target 会跑到 [0,1] 之外。以前这里直接走到下面 u>1 ⇒ return nil，
+    -- 调用方拿不到 pa 就退回旧式子，端点原地不动 —— 用户报的「鼠标一移出时间轴范围就锁死」。
+    -- 越界按整片处理（拖到条外 = 要全片），钉住那头不动，拖动继续跟手。
+    if b - a > 1 then
+        if side == 'right' then b = a + 1 else a = b - 1 end
+    end
     if minw and b - a < minw then          -- 跨度触底：宽度锁在最小跨度上，钉住端仍然不动
         if side == 'right' then b = a + minw else a = b - minw end
     end
@@ -3205,7 +3211,9 @@ local function tl_grab_move(g, mx)
     local dbg = tostring(o.tl_dbg or 'off')     -- 'off' | 'log' | 'file'：取证用，每帧一行
     if (o.tl_ov_map or 'linear') == 'bar' and TL.bar_geom and TL.bar_solve then
         -- 'bar' 模式：抓手的 x 不是"时间尺度"，必须按映射反解（否则画的和点的错位）
-        target = math.max(0, math.min(1, (mx - g.x0) / math.max(1, g.rw)))
+        -- 不钳在 [0,1]：鼠标拖出条的左右边界后仍要能继续带动端点（多留半条宽的余量），
+        -- 越界量交给 TL.bar_solve_px 按"整片/最小跨度"收口。
+        target = math.max(-0.5, math.min(1.5, (mx - g.x0) / math.max(1, g.rw)))
         local feel = tostring(o.tl_grab_feel or 'pr')
         local tph = gr.tph or tonumber(mp.get_property_number('time-pos'))
         local inr = (tph and tph > gr.t0 + 1e-9 and tph < gr.t1 - 1e-9) and true or false
@@ -3294,7 +3302,7 @@ local function tl_grab_move(g, mx)
         -- （0.02 窗口在 0~15 上只有 0.3 s），跨过去就再也回不来，用户看到的是"有概率进不去"。
         local crossed_half = pn ~= nil and gr.pn_prev ~= nil and ((gr.pn_prev - 0.5) * (pn - 0.5) <= 0)
         local in_win = pn ~= nil and (math.abs(pn - 0.5) <= lim or crossed_half)
-        if gr.kind ~= 'mid' and in_win and not gr.sym_block and TL.bar_solve_center then
+        if gr.kind ~= 'mid' and (in_win or gr.edge_lock) and not gr.sym_block and TL.bar_solve_center then
             local hi = math.min(2 * tph, 2 * (g.dur - tph))
             if gr.sym_ready == nil then
                 -- 进入同动的**第一帧**：跨度保持不变，只把中点点到播放头上（跳幅 = |区间中点−播放头|，模式切换的固有最小值）；
@@ -3309,45 +3317,44 @@ local function tl_grab_move(g, mx)
                     local gl2, gr2 = TL.bar_geom(tph - sp_cur / 2, tph + sp_cur / 2, g.dur)
                     gr.sym_off = target - ((gr.kind == 'left') and gl2 or gr2)
                     gr.sym_ready = true
+                    gr.sym_sp0, gr.sym_mx0, gr.edge_lock = sp_cur, target, nil
+                    gr.sym_l0, gr.sym_r0 = tph - sp_cur / 2, tph + sp_cur / 2
                     sym = sp_cur
                 else
                     -- 保留 nil 让它下一帧继续重试；这里不能动 l0/r0，否则单动拖动会把锚点带着走
                     gr.sym_ready, gr.sym_off = nil, nil
                 end
             elseif gr.sym_ready then
-                -- 对称解在跨度=hi 处就已经够不到鼠标 ⇒ 用户要的是"更宽"，对称已到极限（那端会贴片头/片尾）。
-                -- bar_solve_center 遇到够不到的目标会 clamp 返回 hi，于是一路 sp=hi ⇒ 区间永远卡在 hi 上
-                -- （0~15@7.5 抓右圆放大就是死在这里）。这种情况要退回单动：贴边那端钉住，这一端跟手继续放大。
-                local want = target - gr.sym_off
-                local gl_h, gr_h = TL.bar_geom(tph - hi / 2, tph + hi / 2, g.dur)
-                local q_at_hi = (gr.kind == 'left') and gl_h or gr_h
-                local beyond_hi = (gr.kind == 'right') and (q_at_hi <= want) or (gr.kind == 'left') and (q_at_hi >= want)
+                -- 相对缩放：跨度按**鼠标位移**线性变化（不用"鼠标绝对位置 → 跨度"的幂律，小跨度时太敏感；
+                -- 也不用等比——等比缩到最小后步进太小、回到大跨度时又太猛，用户实测"拉弹弓感太强"）。
+                -- 基准固定为进入同动那一刻的跨度与鼠标位置，每帧从基准重算（逐帧累加会被 clamp 带偏）。
+                -- C=0.6：**被拖动那一端**每走 1 个条宽位移，时间上走 0.6 个片长。
+                -- 用"端点位置"而不是"跨度"做连续量，撞边前后速度才一致：
+                -- 对称段右端 = tph + sp/2（两端各走一半），撞边段右端 = sp（只有一端走）。
+                -- 以前按跨度算，撞边瞬间右端速度从 0.6 突变成 1.2（翻倍），用户看到"突然加速超过鼠标"。
+                local C = 0.6
+                local m0 = gr.sym_mx0 or target
+                local d = (target - m0) * C * g.dur
+                local lock = (2 * tph <= 2 * (g.dur - tph)) and 'head' or 'tail'
+                local rmax = tph + hi / 2                     -- 对称能到的最大右端（再大就得撞边）
                 local sp
-                if beyond_hi then
-                    -- 先把对称推到极限（贴边那端正好到位），下一帧才退单动 —— 否则会"跳过贴边那一档"，
-                    -- 左端停在半路（实测 3.4 s）而不是 0，用户看到的是对称没走到头就松开了。
-                    if (g.t1 - g.t0) < hi - 1e-6 then sp = hi end
+                if gr.kind == 'right' then
+                    local rend = (gr.sym_r0 or rmax) + d
+                    if rend <= rmax + 1e-9 then
+                        sp, lock = 2 * (rend - tph), nil
+                    else
+                        sp = rend                              -- 撞边：那一端钉死，右端继续按同一速度外扩
+                    end
                 else
-                    sp = TL.bar_solve_center(g.dur, tph, want, gr.kind)
+                    local lend = (gr.sym_l0 or (tph - hi / 2)) - d
+                    if lend >= -1e-9 then
+                        sp, lock = 2 * (tph - lend), nil
+                    else
+                        sp = 2 * tph - lend
+                    end
                 end
-                -- 对称解已经贴到片头/片尾（sp 触界）就退回单动：否则用户会被“两边一起卡住”锁死
-                -- sp == hi 是合法解（居中且正好贴到片头/片尾）：进入同动那一帧跨度往往就等于 hi，
-                -- 以前写成 sp < hi - 1e-6 会把这一帧判成“触界”，于是刚进去就退回单动 = 区间乱窜
-                if sp and sp <= hi + 1e-6 and (tph - sp / 2) >= -1e-9 and (tph + sp / 2) <= g.dur + 1e-9 then
-                    sym = sp
-                elseif TL.bar_geom then
-                    -- 对称已经贴到片头/片尾：退回单动，并把锚点换成**当前**像素，别跳回抓起时的位置。
-                    -- 同时上锁：同动里 p 恒 0.5，不锁的话下一帧又会“进入同动 → 立刻触界 → 退回”，
-                    -- 用户看到的就是区间闪现 + 漂移 + 反复横跳。锁要等播放头真正离开窗口才解。
-                    gr.l0, gr.r0 = TL.bar_geom(g.t0, g.t1, g.dur)
-                    -- 对称阶段鼠标与端点是"带偏移"的（gr.sym_off）；退单动后端点改用鼠标的**绝对位置**，
-                    -- 于是同一帧区间会猛地缩回（实测 0~15 直接掉到 0.041~8.873）。把偏移记下来，
-                    -- 单动解沿用"鼠标 + 偏移"，切换那一帧区间就不动。
-                    gr.mx_off = ((gr.kind == 'right') and gr.r0 or gr.l0) - target
-                    gr.mx_off_decay = true                          -- 只在"退同动"这处收敛，见下面 3379 行
-                    gr.sym_ready, gr.sym_off = nil, nil
-                    gr.sym_block = true
-                end
+                gr.edge_lock = lock
+                sym = math.max(minspan, math.min(g.dur, sp))
             end
         elseif gr.sym_block and not in_win then
             -- 只有播放头**真正离开** p=0.5 的窗口才解锁。以前这里是无条件 else 分支，
@@ -3355,6 +3362,8 @@ local function tl_grab_move(g, mx)
             -- 下一帧又重进同动 → 触界 → 解锁 → 再进同动，区间卡在 "hi" 上永远出不来
             -- （0~15@7.5 抓右圆放大、对称放大到片头触底后继续拖，都是这个死循环）。
             gr.sym_ready, gr.sym_off, gr.sym_block = nil, nil, nil
+            gr.sym_sp0, gr.sym_mx0, gr.edge_lock = nil, nil, nil
+            gr.sym_l0, gr.sym_r0 = nil, nil
         end
         gr.sym = (sym ~= nil)
         if sym then gr.mx_off = nil end                   -- 回到对称：偏移交给 gr.sym_off，别两边都算
@@ -3382,7 +3391,7 @@ local function tl_grab_move(g, mx)
         end
         -- 从对称退回单动时沿用"鼠标 + 偏移"，否则切换那一帧端点会跳到鼠标的绝对位置
         if gr.mx_off and kind_eff == gr.kind then
-            target_eff = math.max(0, math.min(1, target_eff + gr.mx_off))
+            target_eff = math.max(-0.5, math.min(1.5, target_eff + gr.mx_off))
             -- 退同动那处的偏移只为"切模式那一帧不跳"，之后必须收敛到 0：它是个定值，
             -- 一直加下去鼠标拖到条尾时端点仍差一截 ⇒ 右圆停在 28.787 s 不再跟手（用户报的"锁死"）。
             -- 每帧减半，约 4 帧后 < 3 px，肉眼无感。转嫁那处的偏移是位移基准，不能动。
@@ -3424,7 +3433,13 @@ local function tl_grab_move(g, mx)
             end
         end
         if sym then
-            n0, n1 = tph - sym / 2, tph + sym / 2
+            if gr.edge_lock == 'head' then
+                n0, n1 = 0, math.min(g.dur, sym)
+            elseif gr.edge_lock == 'tail' then
+                n0, n1 = math.max(0, g.dur - sym), g.dur
+            else
+                n0, n1 = tph - sym / 2, tph + sym / 2
+            end
         elseif pa then
             n0, n1 = math.max(0, pa), math.min(g.dur, pb)
         elseif gr.kind == 'left' then
@@ -3559,11 +3574,17 @@ local function tl_click(fx, fy, forced_dbl)
     local now = mp.get_time()
     local dbl = forced_dbl or ((now - TL_LAST.t < 0.40) and math.abs(mx - TL_LAST.x) <= 14)
     TL_LAST.t, TL_LAST.x = (dbl and -10 or now), mx     -- 真双击事件来了就把计时器清零，别触发两次
-    if TL.grab then                     -- 抓手进行中点时间轴 = 放下（真机路径已被整窗区域接管，这里是兜底 + 测试钩子）
-        -- 双击回整片**只认概览条**（用户 m03995）：第二下必须也落在概览条那一行上
-        local on_ov = my and my > math.min(g.rl_y + 1, g.y_ov - (g.cr or 4) - 2)
+    -- 双击回整片**只认概览条**（用户 m03995）：第二下落在概览条那一行才算。
+    -- 这里**不要求"第一下已经抓起"**：第一下若没抓起（命中判空、落点取整到条外一点），
+    -- 第二轮仍带着 dbl=true 走到这里，照样回整片（用户 m04848 报的"双击失效"）。
+    local on_ov = my and my > math.min(g.rl_y + 1, g.y_ov - (g.cr or 4) - 2)
+    if dbl and on_ov then
+        if TL.grab then TL.drop('双击') end
+        tl_reset('双击概览条')
+        return
+    end
+    if TL.grab then                     -- 抓手进行中点时间轴 = 放下
         TL.drop('点击')
-        if dbl and on_ov then tl_reset('双击概览条') end
         return
     end
 
