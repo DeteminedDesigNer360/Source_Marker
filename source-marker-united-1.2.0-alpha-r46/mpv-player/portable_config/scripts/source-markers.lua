@@ -3099,9 +3099,12 @@ TL.bar_solve_px = function(dur, anchor, target, side, minw, edge)
     -- 贴片头/片尾：绘制那边是**钉死**那一端（l=0,w 或 1-w,1），反解必须走同一条式子。
     -- 以前一律用中心公式，贴头时 anchor=0 ⇒ 解出中心 ct≈(0+w)/2 ⇒ 1 h 素材上直接跳到 57 s，
     -- 表现就是「接近最小缩放时一抓就漂」（用户 m04083）。
-    if edge == 'head' or anchor <= 1e-9 then
+    -- 贴边式子只在"**钉死**那一端贴边"时才成立：抓右端 ⇒ 钉死左端 ⇒ 只有左端贴 0 才走 head；
+    -- 抓左端 ⇒ 钉死右端 ⇒ 只有右端贴 dur 才走 tail。以前不分抓哪端都看抓取时的 edge，
+    -- 于是"区间贴片头时抓左端"（左端本来就在 0）会被强行拉回 0，右端跟着乱跳（用户 m04610）。
+    if (edge == 'head' and side == 'right') or (side == 'right' and anchor <= 1e-9) then
         return 0, math.min(dur, span)
-    elseif edge == 'tail' or anchor >= 1 - 1e-9 then
+    elseif (edge == 'tail' and side == 'left') or (side == 'left' and anchor >= 1 - 1e-9) then
         return math.max(0, dur - span), dur
     end
     local c = 0.5 + ((a + b) / 2 - 0.5) / TL.bar_k(u)
