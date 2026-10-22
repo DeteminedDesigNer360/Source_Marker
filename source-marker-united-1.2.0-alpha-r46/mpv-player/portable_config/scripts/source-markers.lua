@@ -89,11 +89,12 @@ local o = {
     tl_key_step = 2.0,         -- 第 9 条：Alt+= / Alt+- 的步长（Pr 的 = 实测就是 ×2）
     tl_labels = true,          -- 第 9 条：刻度上是否显示时间戳（Pr 没有；默认开）
     tl_ov_map = 'bar',         -- 第 9 条：概览条映射 linear | sqrt | pow | bar（bar = Pr 实测形态，默认）
-    tl_ov_pow = 1.30,          -- 第 9 条：亮段宽 = u^pow —— 三轮实测 1.29~1.31，取 1.30
+    tl_ov_pow = 'auto',        -- 第 9 条：亮段宽 = u^pow。'auto' = 按片长自适应（Pr 实测：30 s→1.33、60 min→0.478，
+                               --   log10 插值）；填数字则固定用该值（老口径 1.30 只能对照，1 h 素材会撑出"漂移"）
     tl_ov_k = 1.19,            -- 第 9 条：bar 模式中心斜率（u=1/2 处）—— NS4 两轮拟合，深层按 u^0.68 衰减
-    tl_ov_min_px = 26,         -- 第 9 条 r47：概览条亮段的最小**视觉**宽度（px）。Pr 实测最小 22 px（环直径 10 px 时），
-                               --   mpv 的环直径 13 px ⇒ 等比例 22*13/10 ≈ 26；0 = 退回 2*圆半径+2（两环刚好相切）。
-                               --   只影响绘制，不影响反解（1 h 素材 40 f 的真实宽度只有 0.0003 px）
+    tl_ov_min_px = 0,          -- 第 9 条 r47：概览条亮段的**兜底**最小视觉宽度（px）；0 = 2*圆半径+4（两环相切 + 4 px 空隙）。
+                               --   只在映射结果真的画不出来时才撑开 —— 撑开会把环推到真实映射里不存在的位置，
+                               --   拖动就"漂"（用户 m04083）。正常片长/窗口下映射本身已够宽，不触发。
     tl_ov_pin = 'px',          -- 第 9 条：拖圆缩放的钉住口径 px = 另一端像素不动、该端时间微调（Pr 实测：左端漂 12~16 帧，默认）| time = 另一端时间不动
     tl_hit_px = 0,             -- 第 9 条：概览条两个圆的命中半径（px）。0 = 用**视觉**半径（圆半径 + 描边 2），
                                --   与看到的圆一样大；>0 时以它为准（老口径 13 是"放大 1.1 倍"，会抢走中间横条）
@@ -2418,8 +2419,8 @@ local function render_timeline()
     -- 反解（bar_solve / bar_solve_px）与命中仍用真实 bar_geom 的结果，所以拖动精度不受影响。
     -- r47 对齐 Pr：下限取"两环相切"（2*cr+2）与 tl_ov_min_px（默认 26）的较大者，
     -- 这样最小跨度下两环之间仍留出中间横条（26 - 2*cr ≈ 14 px），点得中。
-    local ov_min_px = tonumber(o.tl_ov_min_px) or 26
-    if ov_min_px <= 0 then ov_min_px = 2 * cr + 2 end
+    local ov_min_px = tonumber(o.tl_ov_min_px) or 0
+    if ov_min_px <= 0 then ov_min_px = 2 * cr + 4 end
     ov_min_px = math.max(ov_min_px, 2 * cr + 2)
     if wx1 - wx0 < ov_min_px then
         local mid = (wx0 + wx1) / 2
@@ -2914,14 +2915,31 @@ local TL_LAST = { t = -10, x = -1e9 }
 TL.grab = nil
 
 -- 概览条 x → 时间（与画的时候同一套映射，反过来；tl_ov_map=sqrt 也一致）
-local function tl_ov_time(g, mx)
+local function tl_ov_time(g, mx, kind, l0, r0)
     local f = (mx - g.x0) / math.max(1, g.rw)
     if f < 0 then f = 0 elseif f > 1 then f = 1 end
-    if (o.tl_ov_map or 'linear') == 'sqrt' then
+    local mode = o.tl_ov_map or 'linear'
+    -- r47 修：'bar' 映射下像素位置**不是**时间比例（w=u^pow 压缩），旧写法按 f*dur 线性反解，
+    -- 最小跨度时 26 px 撑开的环对应到 200+ s，一抓就甩飞（用户报「接近最小缩放时圆环漂移」）。
+    -- 这里按"哪一端跟着鼠标"分别真反解，与 tl_grab_move 用的是同一套 bar_geom。
+    if mode == 'bar' and TL.bar_solve and TL.bar_k then
+        if kind == 'left' then
+            return TL.bar_solve(g.dur, g.t1, f, 'left')
+        elseif kind == 'right' then
+            return TL.bar_solve(g.dur, g.t0, f, 'right')
+        end
+        local u = math.max(0, math.min(1, (g.t1 - g.t0) / math.max(1e-6, g.dur)))
+        local k = TL.bar_k(u)
+        if k and k > 1e-6 then
+            local ct = 0.5 + (f - 0.5) / k        -- 中心映射 xc = 0.5+(c-0.5)*k 的反解
+            return math.max(0, math.min(1, ct)) * g.dur
+        end
+        return f * g.dur
+    end
+    if mode == 'sqrt' then
         f = f * f
-    else
-        local mode = o.tl_ov_map or 'linear'
-        if mode == 'pow' then f = f ^ (1 / (tonumber(o.tl_ov_pow) or 1.29)) end
+    elseif mode == 'pow' then
+        f = f ^ (1 / (tonumber(o.tl_ov_pow) or 1.29))
     end
     return f * g.dur
 end
@@ -2939,11 +2957,24 @@ TL.bar_k = function(u)
     return 1 + (k5 - 1) * math.min(1, u / 0.5) ^ 0.68
 end
 
+-- 条宽曲线的指数**随片长变**（Pr 实测两点：30 s 素材 b≈1.33、60 min 素材 b=0.478，
+-- 按 log10(片长) 线性插值，夹在 [0.42, 1.40]）。老口径固定 1.30 是早期误拟合 ——
+-- 第 28 轮实测 60 min 五档是 0.468~0.492。用固定 1.30 时 1 h 素材只要跨度 <200 s 条宽就掉到视觉下限以下，
+-- 靠"撑开"硬画 ⇒ 环被推到自己真实映射里不存在的位置，一抓就漂（用户 m04083）。
+TL.bar_pow = function(dur)
+    local p = tonumber(o.tl_ov_pow)
+    if p and p > 0 then return p end                       -- 显式数字 = 固定值（老口径/对照用）
+    local d = math.max(1, tonumber(dur) or 1)
+    local v = 1.33 - 0.4096 * (math.log(d) / math.log(10) - 1.477)
+    if v < 0.42 then v = 0.42 elseif v > 1.40 then v = 1.40 end
+    return v
+end
+
 TL.bar_geom = function(t0, t1, dur)
     if not dur or dur <= 0 then return 0, 1 end
     local u = math.max(0, math.min(1, (t1 - t0) / dur))
     local c = math.max(0, math.min(1, (t0 + t1) / (2 * dur)))
-    local w = u ^ (tonumber(o.tl_ov_pow) or 1.29)
+    local w = u ^ TL.bar_pow(dur)
     -- 贴边必须**钉住**：区间碰到片头/片尾时，那一端就固定在 0/1，宽度照旧由 u 决定。
     -- 否则中心公式（xc 带 k>1 的放大）会让"本该不动的另一端"跟着漂 —— 用户实测：
     -- 播放头 0 时拖右圆从最小到最大，左端在 16s 起右移、23s 到顶、30s 回到原位（复现：138→147→138）。
@@ -3031,9 +3062,9 @@ end
 -- 'bar' 模式的反解（像素钉死，Pr 上机实测定论：拖右圆时左端像素不动、左端时间微调 12~16 帧）
 -- anchor = 抓起时"另一端"的归一化位置（抓右端 ⇒ anchor 是左端 l0）；target = 被拖端的目标位置
 -- w = b-a 定 u，u 定 span；xc = (a+b)/2 定 c，再由 c 定时中 ⇒ 两端时间。
-TL.bar_solve_px = function(dur, anchor, target, side, minw)
+TL.bar_solve_px = function(dur, anchor, target, side, minw, edge)
     if not dur or dur <= 0 or not anchor then return nil end
-    local pow = tonumber(o.tl_ov_pow) or 1.29
+    local pow = TL.bar_pow(dur)          -- 必须与绘制同一口径，否则反解与画面错位（= 漂移）
     local a, b
     if side == 'right' then a, b = anchor, target else a, b = target, anchor end
     if minw and b - a < minw then          -- 跨度触底：宽度锁在最小跨度上，钉住端仍然不动
@@ -3043,8 +3074,16 @@ TL.bar_solve_px = function(dur, anchor, target, side, minw)
     if w <= 1e-6 then return nil end
     local u = w ^ (1 / pow)
     if u > 1 then return nil end
-    local c = 0.5 + ((a + b) / 2 - 0.5) / TL.bar_k(u)
     local span = u * dur
+    -- 贴片头/片尾：绘制那边是**钉死**那一端（l=0,w 或 1-w,1），反解必须走同一条式子。
+    -- 以前一律用中心公式，贴头时 anchor=0 ⇒ 解出中心 ct≈(0+w)/2 ⇒ 1 h 素材上直接跳到 57 s，
+    -- 表现就是「接近最小缩放时一抓就漂」（用户 m04083）。
+    if edge == 'head' or anchor <= 1e-9 then
+        return 0, math.min(dur, span)
+    elseif edge == 'tail' or anchor >= 1 - 1e-9 then
+        return math.max(0, dur - span), dur
+    end
+    local c = 0.5 + ((a + b) / 2 - 0.5) / TL.bar_k(u)
     local mid = c * dur
     return mid - span / 2, mid + span / 2
 end
@@ -3124,7 +3163,8 @@ local function tl_grab_start(g, mx)
     -- “播放头在正中就对称缩放”的门槛忽过忽不过
     local tph0 = tonumber(mp.get_property_number('time-pos'))
     local p00 = (tph0 and tph0 > g.t0 + 1e-9 and tph0 < g.t1 - 1e-9) and (tph0 - g.t0) / (g.t1 - g.t0) or nil
-    TL.grab = { kind = kind, t0 = g.t0, t1 = g.t1, base = tl_ov_time(g, mx), mx0 = mx, l0 = gl0, r0 = gr0, tph = tph0, p0 = p00 }
+    TL.grab = { kind = kind, t0 = g.t0, t1 = g.t1, base = tl_ov_time(g, mx, kind, gl0, gr0), mx0 = mx,
+                l0 = gl0, r0 = gr0, tph = tph0, p0 = p00 }
     tl_grab_sections(true)
     msg.verbose(string.format('时间轴·抓起 %s（%.3f ~ %.3f，鼠标处 %.3f）：移动鼠标改范围，点任意处/按任意键放下，ESC 放弃',
         kind == 'left' and '左端' or (kind == 'right' and '右端' or '整段'), g.t0, g.t1, TL.grab.base))
@@ -3320,14 +3360,18 @@ local function tl_grab_move(g, mx)
         end
         local pa, pb
         if pinpx and (kind_eff == 'left' or kind_eff == 'right') then
-            local wmin = (minspan / g.dur) ^ (tonumber(o.tl_ov_pow) or 1.29)
+            local wmin = (minspan / g.dur) ^ TL.bar_pow(g.dur)
             local anchor = kind_eff == 'right' and gr.l0 or gr.r0
-            pa, pb = TL.bar_solve_px(g.dur, anchor, target_eff, kind_eff, wmin)
+            -- 抓取时区间贴片头/片尾 ⇒ 绘制那边是钉死那一端，反解也必须钉死，
+            -- 否则中心公式会把"贴头"解成别处的等宽区间（1 h 素材上偏到 48 s，用户报的漂移）。
+            local eps_edge = g.dur * 1e-4
+            local edge = (gr.t0 <= eps_edge) and 'head' or ((gr.t1 >= g.dur - eps_edge) and 'tail' or nil)
+            pa, pb = TL.bar_solve_px(g.dur, anchor, target_eff, kind_eff, wmin, edge)
             if pa and not (pb - pa >= minspan - 1e-9 and pa >= -1e-9 and pb <= g.dur + 1e-9) then
                 -- 时间越界：先看是**哪一端**出头，再按那一侧的贴边公式重解
                 --   左端出头 ⇒ t0=0，宽度 = 右端的归一化位置（抓右端时右端跟手，否则用抓起时的锚 r0）
                 --   右端出头 ⇒ t1=dur，宽度 = 1 - 左端的归一化位置（抓左端时左端跟手，否则用锚 l0）
-                local pow = tonumber(o.tl_ov_pow) or 1.29
+                local pow = TL.bar_pow(g.dur)
                 local w
                 if pa < -1e-9 then
                     w = (kind_eff == 'right') and target_eff or anchor
@@ -3394,7 +3438,7 @@ local function tl_grab_move(g, mx)
             end
         end
     else
-        local at = tl_ov_time(g, mx)
+        local at = tl_ov_time(g, mx, gr.kind)
         if gr.kind == 'left' then
             n0 = math.max(0, math.min(at, gr.t1 - minspan))        -- 左圆跟鼠标，右端不动
             n1 = gr.t1
@@ -3440,7 +3484,8 @@ mp.register_script_message('tl-grab', function(kind, u0)
     local ux = tonumber(u0)
     if ux == nil then ux = (kind == 'left' and gl0) or (kind == 'right' and gr0) or 0.5 end
     local mx0 = g.x0 + math.max(0, math.min(1, ux)) * g.rw
-    TL.grab = { kind = kind, t0 = g.t0, t1 = g.t1, base = tl_ov_time(g, mx0), mx0 = mx0, l0 = gl0, r0 = gr0, tph = tph0, p0 = p00 }
+    TL.grab = { kind = kind, t0 = g.t0, t1 = g.t1, base = tl_ov_time(g, mx0, kind, gl0, gr0), mx0 = mx0,
+                l0 = gl0, r0 = gr0, tph = tph0, p0 = p00 }
     tl_grab_sections(true)
     msg.verbose('时间轴·抓起（取证）' .. tostring(kind))
 end)
