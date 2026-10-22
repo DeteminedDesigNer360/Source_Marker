@@ -92,8 +92,8 @@ local o = {
     tl_ov_pow = 'auto',        -- 第 9 条：亮段宽 = u^pow。'auto' = 按片长自适应（Pr 实测：30 s→1.33、60 min→0.478，
                                --   log10 插值）；填数字则固定用该值（老口径 1.30 只能对照，1 h 素材会撑出"漂移"）
     tl_ov_k = 1.19,            -- 第 9 条：bar 模式中心斜率（u=1/2 处）—— NS4 两轮拟合，深层按 u^0.68 衰减
-    tl_ov_min_px = 26,         -- 第 9 条 r47：最小跨度时概览条亮段的**目标**宽度（px，含两环）—— 按 Pr 口径定：
-                               --   Pr 最小 31 px = 2×10 圆 + 11 px 横条 ⇒ 我方环径 13 ⇒ 目标 26 px（中间横条 13 px）。
+    tl_ov_min_px = 27,         -- 第 9 条 r47：最小跨度时概览条亮段的**目标**宽度（px，含两环）—— 按 Pr 口径定：
+                               --   Pr 最小 31 px = 2×10 圆 + 11 px 横条 ⇒ 我方环径 14（半径 cr+1）⇒ 27 px（中间横条 13 px）。
                                --   宽度指数由它反推（见 TL.bar_pow），所以最小档是真实映射、不用撑开、拖圆不漂。
                                --   同时兼作兜底下限：映射真的画不到这么宽时才会撑开。0 = 自动（2*圆半径+4）。
     tl_ov_pin = 'px',          -- 第 9 条：拖圆缩放的钉住口径 px = 另一端像素不动、该端时间微调（Pr 实测：左端漂 12~16 帧，默认）| time = 另一端时间不动
@@ -2032,8 +2032,11 @@ end
 -- 否则一眼分不清谁是谁；盾沿用「打标记」那个五边形，视觉语言统一）
 local SHIELD_SMALL = { 5, 10, 15, 10, 15, 15, 10, 19.5, 5, 15 }
 
-local function circle_pts(cx, cy, r, reverse)
-    local pts, n = {}, 16
+-- n = 分段数（默认 16 够图标用；概览条的圆环在 16 段时弦高差 ≈0.12r，
+-- 16 倍放大后会在大圆与外圈交界处显出锯齿轮廓 —— 用户看到"发黑的一点点"就是它）。
+local function circle_pts(cx, cy, r, reverse, n)
+    local pts = {}
+    n = n or 16
     for i = 0, n - 1 do
         local k = reverse and (n - i) or i
         local a = 2 * math.pi * k / n
@@ -2438,18 +2441,22 @@ local function render_timeline()
     for i, xc in ipairs({ wx0, wx1 }) do
         local hot = (grk == ((i == 1) and 'left' or 'right'))
         local cx = math.floor(xc)
-        local r = hot and (cr + 2) or cr
+        -- r47 第六步补：环比亮段（内层高 = 2*cr）再高 1 px，让圆环的四个肩角"顶出"横条边缘，
+        -- 否则圆与矩形相切处会留一圈月牙形暗色（用户 16 倍放大指出的"发黑的一点点"）。
+        local r = hot and (cr + 3) or (cr + 1)
         -- Pr 的抓手只有**两层**（16 倍放大截图逐像素量）：亮环 0x8A8A8A + 中心挖空的暗圆 0x1D1D1D，
         -- 外面没有描边/发光那一圈（以前多画了一层 0x101010 外发光，放大看是"三层"）。
         -- 抓取/hover 时只把环变纯白并放大 2 px，其余不变。
         lines[#lines + 1] = poly_line(cx - r, ov_mid - r, r / 10, hot and '&HFFFFFF&' or '&H8A8A8A&', '00',
-            circle_pts(10, 10, 10))
-        -- 环厚：Pr 的"亮环 : 暗心"略大于 4:6 ⇒ 两边加起来约 5~6 px（直径 13 px 时）
+            circle_pts(10, 10, 10, false, 48))
+        -- 环厚：Pr 的"亮环 : 暗心"略大于 4:6 ⇒ 两边加起来约 5~6 px（直径 14 px 时 = 单边 3）。
+        -- 用户反馈"亮度差大、放大看轮廓发毛" —— 处理方式是**加密多边形**（48 段，见上面的 circle_pts），
+        -- 而不是加厚：再厚就变实心圆盘，暗心只剩 5 px，反而不像 Pr 的细环。
         local ring = math.max(2, math.floor(cr * 0.42 + 0.5))
         local rr = r - ring
         if rr >= 1 then
             lines[#lines + 1] = poly_line(cx - rr, ov_mid - rr, rr / 10, '&H1D1D1D&', '00',
-                circle_pts(10, 10, 10))
+                circle_pts(10, 10, 10, false, 48))
         end
     end
 
