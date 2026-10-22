@@ -1685,7 +1685,8 @@ load_key_overrides()   -- 第 5 条：先读键位覆盖表，后面注册绑定
 -- 第 8 条：OSD 样式。style = 'panel'（旧按钮面板）| 'prbar'（Pr 风格控制栏）。
 -- panel / bar 是两个样式各自的「是否显示」；互斥由 ui_set_shown() 统一保证。
 local UI = { help = false, panel = o.panel == true, hover = nil, hint_shown = false, mode = false,
-             style = 'panel', bar = false }
+             style = 'panel', bar = false,
+             panel_min = false }   -- 第 9 条 r47：按钮面板"最小化"（缩成左下角一个小方块）
 local PANEL_BUTTONS = {}          -- 渲染后填充：{name,label,x,y,w,h,section}
 local PRBAR_BUTTONS = {}          -- 第 8 条：控制栏按钮的命中框（渲染后填充）
 local SIDE_PADDING = 40
@@ -1900,13 +1901,35 @@ local function render_panel()
     local pad = math.max(6, math.floor(size * 0.4))
     local bh = size + 2 * pad                       -- 按钮高
     local gap = math.max(4, math.floor(size * 0.35))
+
+    -- 第 9 条 r47：最小化 —— 整块面板只剩左下角一个小方块（里面是 ＋），点它还原。
+    -- 用与正常面板同一套 PANEL_BUTTONS + input section 机制，所以鼠标区域照旧由本函数末尾注册。
+    if UI.panel_min then
+        local bw = math.max(26, bh)
+        local bx = math.max(10, math.floor(SIDE_PADDING / 2))
+        local by = h - bw - math.max(24, math.floor(h * 0.06))
+        local hovered = (UI.hover == 'panel-min')
+        local lines = {
+            rect_line(bx, by, bw, bw, hovered and '&H3C6E9E&' or '&H333333&', hovered and '10' or '35'),
+            text_line(bx + pad, by + math.floor((bw - size) / 2), size, '&HFFFFFF&', '＋', hovered),
+        }
+        set_overlay(overlay_panel, lines, w, h)
+        local b = { name = 'panel-min', label = '＋', x = bx, y = by, w = bw, h = bw }
+        PANEL_BUTTONS = { b }
+        b.section = 'sm_panel_panel_min'
+        mp.commandv('define-section', b.section, 'mbtn_left script-binding ' .. BIND_PREFIX .. b.name, 'force')
+        mp.commandv('enable-section', b.section)
+        mp.set_mouse_area(b.x, b.y, b.x + b.w, b.y + b.h, b.section)
+        return
+    end
     local x0 = math.max(SIDE_PADDING, tonumber(o.panel_x) or 40)
     -- 排列：标题行（含 帮助/关闭）→ 颜色行 → 两行功能按钮。
     -- 颜色行放在最上面：即使窗口很矮、面板贴近底部，颜色也最不容易被进度条挡住。
     local row_main, row_extra, color_row, row_title = {}, {}, {}, {}
     for _, a in ipairs(ACTIONS) do
         if a.color then color_row[#color_row + 1] = a
-        elseif a.name == 'help' or a.name == 'toggle-panel' then row_title[#row_title + 1] = a
+        elseif a.name == 'help' or a.name == 'toggle-panel' or a.name == 'panel-min' then
+            row_title[#row_title + 1] = a
         elseif #row_main < 5 then row_main[#row_main + 1] = a
         else row_extra[#row_extra + 1] = a end
     end
@@ -3638,10 +3661,38 @@ local function ui_set_shown(style, on)
     end
 end
 
+-- 第 9 条 r47：面板最小化 / 还原（设计 §六：缩成左下角一个小方块，点方块还原）
+local function toggle_panel_min(state)
+    if UI.style ~= 'panel' then
+        notify('最小化只对按钮面板有效（当前是 Pr 风格控制栏）')
+        return
+    end
+    if not UI.panel then ui_set_shown('panel', true) end     -- 面板没开时点 − 先把它打开
+    UI.panel_min = (state == nil) and (not UI.panel_min) or (state == true)
+    render_panel()
+    if save_ui_state then save_ui_state() end
+    log('面板最小化 → %s', tostring(UI.panel_min))
+    if UI.panel_min then
+        notify('面板已最小化：点左下角的小方块还原（或按 ' .. key_of('toggle-panel') .. '）')
+    else
+        notify('按钮面板已还原')
+    end
+end
+
 local function toggle_panel(state)
     local style = (UI.style == 'prbar') and 'prbar' or 'panel'
+    -- 第 9 条 r47：最小化状态下按 F2 = 还原（用户原文的要求）
+    if state == nil and style == 'panel' and UI.panel and UI.panel_min then
+        UI.panel_min = false
+        render_panel()
+        if save_ui_state then save_ui_state() end
+        log('面板最小化 → false（F2 还原）')
+        notify('按钮面板已还原')
+        return
+    end
     local on = (state == nil) and (not ui_style_shown(style)) or (state == true)
     ui_set_shown(style, on)
+    if not on then UI.panel_min = false end    -- 关闭时"最小化"没有意义，下次打开按完整面板算
     render_panel()
     render_prbar()
     render_timeline()
@@ -4259,6 +4310,11 @@ register({ key = 'F1', name = 'help', label = '帮助',
 register({ key = 'F2', name = 'toggle-panel', label = 'OSD 显示/隐藏',
     help = '显示 / 隐藏当前 OSD（按钮面板 或 Pr 风格控制栏；用 F3 换样式）' }, function() toggle_panel() end)
 
+-- 第 9 条 r47：面板最小化（标题行右侧的 −）。缩成左下角一个小方块，点它还原。
+register({ key = 'Alt+F2', name = 'panel-min', label = '−',
+    help = '把按钮面板缩成左下角一个小方块（点方块还原；最小化状态下按 F2 也还原）' },
+    function() toggle_panel_min() end)
+
 register({ key = 'F3', name = 'switch-osd', label = '切换 OSD 样式',
     help = '在「按钮面板」和「Pr 风格控制栏」之间切换（切完立即显示）' }, function() switch_osd_style() end)
 
@@ -4332,6 +4388,7 @@ local function load_ui_state()
         -- 上次会话的选择优先；配置里的 panel=yes/no 只在"还没有界面状态文件"时当默认值。
         -- （原来写成"配置写了 panel=yes 就以配置为准"，结果 F2 关掉面板后下次启动又会被强开 ✗）
         if d.panel ~= nil then UI.panel = d.panel == true end
+        if d.panel_min ~= nil then UI.panel_min = d.panel_min == true end   -- 第 9 条 r47
         -- 第 8 条：样式 + 控制栏是否显示。旧文件没有这两个键 ⇒ 样式仍是按钮面板、
         -- 控制栏不显示，行为与升级前完全一致（用户实测过的路径不变）
         if d.style == 'prbar' or d.style == 'panel' then UI.style = d.style end
@@ -4349,7 +4406,8 @@ save_ui_state = function()
     if not p then return end
     -- 三项开关全部落盘：按钮面板 / 帮助浮窗 / 标记列表（外加「首次提示已显示」）
     write_file_atomic(p, json_encode({
-        panel = UI.panel, help = UI.help, show_list = S.show_list, hint_shown = UI.hint_shown, mode = UI.mode,
+        panel = UI.panel, panel_min = UI.panel_min,
+        help = UI.help, show_list = S.show_list, hint_shown = UI.hint_shown, mode = UI.mode,
         style = UI.style, bar = UI.bar,
         tl_file = TL.cur_file, tl_t0 = TL.t0, tl_t1 = TL.t1,   -- 第 9 条 r46：时间轴可见范围
     }))
@@ -4466,7 +4524,7 @@ mp.register_script_message('ui-state', function(path)
     local w, h = osd_size()
     local bottom_opt = tonumber(o.panel_bottom) or 0
     local payload = json_encode({
-        help = UI.help, panel = UI.panel, hover = UI.hover,
+        help = UI.help, panel = UI.panel, panel_min = UI.panel_min, hover = UI.hover,
         help_lines = lines_of(overlay_help), panel_lines = lines_of(overlay_panel),
         count = #S.markers, color = S.color, list = S.show_list,
         sidecar = S.sidecar, buttons = btns, keys = keys,
