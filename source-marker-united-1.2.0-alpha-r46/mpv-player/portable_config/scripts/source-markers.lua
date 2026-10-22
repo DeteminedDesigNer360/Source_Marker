@@ -2389,10 +2389,14 @@ local function render_timeline()
     -- Pr 的构造：轨道高度 = 圆的直径（圆与轨道上下沿相切），亮段是与轨道同高的矩形
     local crv = m.cr or (math.max(3, math.floor(3.6 * s + 0.5)) + 2)
     local ov_track_h = math.max(3, 2 * crv)
-    -- 非激活轨道：Pr 实测 0x1D1D1D（16 倍放大截图逐像素量出来的区间外底色）
-    -- 透明度：Pr 的深灰是画在它自己的深色 UI 上；mpv 是浮在视频上，全不透明会挡画面，
-    -- 所以两层都带一点 alpha（'00' = 不透明、'FF' = 全透明，这里约 75% / 88% 不透明）。
-    lines[#lines + 1] = rect_line(x0, ov_mid - math.floor(ov_track_h / 2), rw, ov_track_h, '&H1D1D1D&', '40')
+    -- Pr 的构造（用户 16x 截图）：**胶囊轮廓** —— 上下各 1 px 亮线 + 两端半圆，内部再填深色。
+    -- 做法：先铺一整块"亮线色"的胶囊，再盖一层内缩 1 px 的轨道色胶囊，留下的就是那 1 px 轮廓。
+    -- 环在端点时半径与胶囊圆头相同，正好把半圆盖住（Pr 的效果）。
+    local ov_r = math.max(2, math.floor(ov_track_h / 2))
+    lines[#lines + 1] = round_rect_line(x0, ov_mid - ov_r, rw, ov_track_h, ov_r, '&H313131&', '00')
+    local ov_ih = math.max(2, ov_track_h - 2)                 -- 内层高
+    local ov_iy = ov_mid - ov_r + 1                          -- 内层顶
+    lines[#lines + 1] = round_rect_line(x0 + 1, ov_iy, rw - 2, ov_ih, math.max(1, ov_r - 1), '&H141414&', '00')
     local function ov_frac(f)
         f = math.max(0, math.min(1, f))
         local mode = o.tl_ov_map or 'linear'
@@ -2424,9 +2428,11 @@ local function render_timeline()
         if wx1 > x0 + rw then wx0, wx1 = x0 + rw - ov_min_px, x0 + rw end
     end
     local grk = (TL.grab and TL.grab.kind) or ''      -- 抓取中：对应抓手画亮（r46）
-    lines[#lines + 1] = rect_line(math.floor(wx0), ov_mid - math.floor(ov_track_h / 2),
-        math.max(1, math.floor(wx1 - wx0)), ov_track_h,
-        (grk == 'mid') and '&H8A8A8A&' or '&H313131&', (grk == 'mid') and '00' or '28')
+    -- 亮段也画成胶囊：贴到端点时才不会用直角把圆头削掉；两端最终被环盖住（与 Pr 一致）
+    local seg_x = math.floor(wx0) + 1
+    local seg_w = math.max(2 * math.floor(ov_ih / 2), math.floor(wx1) - math.floor(wx0) - 2)
+    lines[#lines + 1] = round_rect_line(seg_x, ov_iy, seg_w, ov_ih, math.max(1, math.floor(ov_ih / 2)),
+        (grk == 'mid') and '&H8A8A8A&' or '&H313131&', '00')
     for i, xc in ipairs({ wx0, wx1 }) do
         local hot = (grk == ((i == 1) and 'left' or 'right'))
         local cx = math.floor(xc)
@@ -2436,8 +2442,8 @@ local function render_timeline()
         -- 抓取/hover 时只把环变纯白并放大 2 px，其余不变。
         lines[#lines + 1] = poly_line(cx - r, ov_mid - r, r / 10, hot and '&HFFFFFF&' or '&H8A8A8A&', '00',
             circle_pts(10, 10, 10))
-        -- 环厚：Pr 实测"亮环 1.5 px / 直径 10 px" ⇒ 约半径的 1/4（以前 1/3，放大看环偏厚、心偏小）
-        local ring = math.max(1, math.floor(cr * 0.25 + 0.9))
+        -- 环厚：Pr 的"亮环 : 暗心"略大于 4:6 ⇒ 两边加起来约 5~6 px（直径 13 px 时）
+        local ring = math.max(2, math.floor(cr * 0.42 + 0.5))
         local rr = r - ring
         if rr >= 1 then
             lines[#lines + 1] = poly_line(cx - rr, ov_mid - rr, rr / 10, '&H1D1D1D&', '00',
@@ -3467,10 +3473,6 @@ end)
 local function tl_click(fx, fy, forced_dbl)
     local g = TL.geo
     if not g then return end
-    if TL.grab then                     -- 抓手进行中点时间轴 = 放下（真机路径已被整窗区域接管，这里是兜底 + 测试钩子）
-        TL.drop('点击')
-        return
-    end
     local mx, my = fx, fy
     if not mx then
         local p = mp.get_property_native('mouse-pos')
@@ -3480,6 +3482,13 @@ local function tl_click(fx, fy, forced_dbl)
     local now = mp.get_time()
     local dbl = forced_dbl or ((now - TL_LAST.t < 0.40) and math.abs(mx - TL_LAST.x) <= 14)
     TL_LAST.t, TL_LAST.x = (dbl and -10 or now), mx     -- 真双击事件来了就把计时器清零，别触发两次
+    if TL.grab then                     -- 抓手进行中点时间轴 = 放下（真机路径已被整窗区域接管，这里是兜底 + 测试钩子）
+        -- 双击回整片**只认概览条**（用户 m03995）：第二下必须也落在概览条那一行上
+        local on_ov = my and my > math.min(g.rl_y + 1, g.y_ov - (g.cr or 4) - 2)
+        TL.drop('点击')
+        if dbl and on_ov then tl_reset('双击概览条') end
+        return
+    end
 
     local function seek_frame(tt, why)
         local fr = math.floor(tt * g.fps + 1e-6)         -- 与"吸帧"同一口径：跳到帧起点
@@ -3514,8 +3523,8 @@ local function tl_click(fx, fy, forced_dbl)
     -- ② 刻度带：单击跳到该处（吸到帧头），双击回整片
     --    下界要停在"概览圆的顶上"：圆中心在概览行，半径 6 px，圆的上半截在基线以下、
     --    却仍 <= rl_y+1，于是点圆的上 1/3 会被这里当成"点刻度带"直接跳走 —— 圆看着缺一块点不中。
+    -- 双击回整片只在概览条上（用户 m03995：以前整条时间轴都能触发，容易误触）
     if my >= g.y_lab - 2 and my <= math.min(g.rl_y + 1, g.y_ov - (g.cr or 4) - 2) then
-        if dbl then tl_reset('双击刻度带') return end
         seek_frame(g.t0 + (mx - g.x0) / math.max(1, g.rw) * g.span, '点击刻度带')
         return
     end
@@ -3526,6 +3535,7 @@ local function tl_click(fx, fy, forced_dbl)
             msg.verbose('时间轴·放下（' .. TL.grab.kind .. '）')
             TL.grab = nil
             render_timeline()
+
         else
             tl_grab_start(g, mx)
         end
