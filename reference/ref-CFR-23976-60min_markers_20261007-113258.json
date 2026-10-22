@@ -1,0 +1,55 @@
+{
+  "format": "source-markers",
+  "version": 1,
+  "created": "2026-10-07T03:32:58Z",
+  "source": {
+    "file": "C:\\Users\\Frisk\\Documents\\Source_Marker_United\\参考视频\\ref-CFR-23976-60min.mp4",
+    "fps": 23.976,
+    "durationSec": null,
+    "timeFormat": "ms"
+  },
+  "markers": [
+    {
+      "time": 0,
+      "tc": "00:00:00:00",
+      "name": "",
+      "comment": "White",
+      "color": 5
+    },
+    {
+      "time": 10.01,
+      "tc": "00:00:10:00",
+      "name": "",
+      "comment": "Cyan",
+      "color": 7
+    },
+    {
+      "time": 899.982,
+      "tc": "00:15:00:00",
+      "name": "",
+      "comment": "Red",
+      "color": 1
+    },
+    {
+      "time": 1800.007,
+      "tc": "00:30:00:00",
+      "name": "",
+      "comment": "Green",
+      "color": 0
+    },
+    {
+      "time": 2699.989,
+      "tc": "00:45:00:00",
+      "name": "",
+      "comment": "Blue",
+      "color": 6
+    },
+    {
+      "time": 3600.013,
+      "tc": "01:00:00:00",
+      "name": "",
+      "comment": "Yellow",
+      "color": 4
+    }
+  ]
+}
