@@ -3283,6 +3283,7 @@ local function tl_grab_move(g, mx)
         if gr.trans and growing and TL.bar_geom then
             gr.l0, gr.r0 = TL.bar_geom(g.t0, g.t1, g.dur)
             gr.mx_off = ((gr.kind == 'right') and gr.r0 or gr.l0) - target
+            gr.mx_off_decay = false                            -- 转嫁的偏移要一直带着（位移基准），别衰减
             gr.mx_ref, gr.l_ref, gr.r_ref = nil, nil, nil     -- 下次转嫁重新取基准
         end
         -- 抓中段（mid）永远是整体平移：播放头在区间正中时也让 mid 进对称的话，横轴就拖不动了
@@ -3340,6 +3341,7 @@ local function tl_grab_move(g, mx)
                     -- 于是同一帧区间会猛地缩回（实测 0~15 直接掉到 0.041~8.873）。把偏移记下来，
                     -- 单动解沿用"鼠标 + 偏移"，切换那一帧区间就不动。
                     gr.mx_off = ((gr.kind == 'right') and gr.r0 or gr.l0) - target
+                    gr.mx_off_decay = true                          -- 只在"退同动"这处收敛，见下面 3379 行
                     gr.sym_ready, gr.sym_off = nil, nil
                     gr.sym_block = true
                 end
@@ -3378,6 +3380,12 @@ local function tl_grab_move(g, mx)
         -- 从对称退回单动时沿用"鼠标 + 偏移"，否则切换那一帧端点会跳到鼠标的绝对位置
         if gr.mx_off and kind_eff == gr.kind then
             target_eff = math.max(0, math.min(1, target_eff + gr.mx_off))
+            -- 退同动那处的偏移只为"切模式那一帧不跳"，之后必须收敛到 0：它是个定值，
+            -- 一直加下去鼠标拖到条尾时端点仍差一截 ⇒ 右圆停在 28.787 s 不再跟手（用户报的"锁死"）。
+            -- 每帧减半，约 4 帧后 < 3 px，肉眼无感。转嫁那处的偏移是位移基准，不能动。
+            if gr.mx_off_decay then
+                gr.mx_off = (math.abs(gr.mx_off) < 0.002) and nil or gr.mx_off * 0.5
+            end
         end
         local pa, pb
         if pinpx and (kind_eff == 'left' or kind_eff == 'right') then
