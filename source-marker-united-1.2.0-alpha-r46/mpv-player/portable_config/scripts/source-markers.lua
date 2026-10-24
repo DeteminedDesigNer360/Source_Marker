@@ -1912,13 +1912,25 @@ end
 -- 按钮面板（鼠标可点的 OSD 浮窗）
 ----------------------------------------------------------------------
 
-local function panel_sections_off()
+UI.panel_sections_off = function()
     for _, b in ipairs(PANEL_BUTTONS) do
         if b.section then
             mp.commandv('disable-section', b.section)
             mp.set_mouse_area(0, 0, 0, 0, b.section)
         end
     end
+end
+
+-- 第 9 条 r48：把 ASS 颜色 (&HBBGGRR&) 往它的亮度灰靠拢，keep 越小越灰。
+-- 用途：面板拖动中，颜色 0~7 的色块仍然"是它自己那个颜色"，只是降饱和度 ——
+-- 直接涂灰会让用户以为颜色索引变了。
+UI.dim_ass = function(s, keep)
+    local b = tonumber(s:sub(3, 4), 16) or 128
+    local g = tonumber(s:sub(5, 6), 16) or 128
+    local r = tonumber(s:sub(7, 8), 16) or 128
+    local luma = 0.299 * r + 0.587 * g + 0.114 * b
+    local function mix(v) return math.max(0, math.min(255, math.floor(luma + (v - luma) * keep + 0.5))) end
+    return string.format('&H%02X%02X%02X&', mix(b), mix(g), mix(r))
 end
 
 -- 第 9 条 r48：面板位置的**唯一**夹紧口径 —— 背景框是 (left-12, top-10, panel_w+24, total_h+16)，
@@ -1932,10 +1944,123 @@ UI.panel_clamp = function(left, top, w, h, pw, ph)
     return left, top
 end
 
+-- 第 9 条 r48：Lua 5.1 单个函数的 upvalue 上限是 60（报错原文
+-- "function at line 1947 has more than 60 upvalues"）。render_panel 这几年一直贴着上限，
+-- 把常用绘制助手挂到 UI 上按需取 —— UI 本身只占一个名额，换来的是后续功能还有余量。
+UI.rect_line, UI.text_line = rect_line, text_line
+UI.ass_color, UI.swatch_colors = ass_color, swatch_colors
+
+UI.rect_line, UI.text_line = rect_line, text_line
+UI.ass_color, UI.swatch_colors = ass_color, swatch_colors
+
+-- 第 9 条 r48：面板绘制拆成三个顶层函数（panel_place / panel_draw / panel_measure），
+-- 由 render_panel 用一个 cfg 表传尺寸与分行。原因：Lua 5.1 单个函数的 upvalue 上限是 60，
+-- 嵌套函数要用的外层 local 必须先在 render_panel 里中继成 upvalue，累积后直接超限
+-- （报错原文 "function at line 1953 has more than 60 upvalues"）。抽到顶层后它们直接引用
+-- main chunk 的 local，把额度还给 render_panel 自己，后续加功能也不会再撞这堵墙。
+UI.panel_place = function(cfg, lines, buttons, list, y, start_x)
+    local size, pad, bh, gap = cfg.size, cfg.pad, cfg.bh, cfg.gap
+    local x = start_x or cfg.left
+    for _, a in ipairs(list) do
+        -- 第 9 条 r48：宽度 = 实测字宽 + 左右各 pad（+2 是抗四舍五入的余量），文字按 (bw-tw)/2 居中
+        local tw = UI.label_px(a.label, size)
+        local bw = tw + 2 * pad + 2
+        local hovered = (UI.hover == a.name)
+        -- 第 9 条 r48：拖动中其它按钮的命中区已整体关掉，视觉上也要跟上（灰字 + 淡底），
+        -- 否则用户会以为还能点，点下去却没反应
+        local dis = UI.panel_drag and a.name ~= 'panel-grab'
+        buttons[#buttons + 1] = { name = a.name, label = a.label, x = x, y = y, w = bw, h = bh }
+        local hov = hovered and not dis
+        local bg, alpha = '&H333333&', '35'
+        if a.color then
+            -- 色块：保持它自己的颜色；拖动中只降饱和度，不涂灰（涂灰会被读成"颜色变了"）
+            bg = UI.ass_color(a.color)
+            if dis then bg = UI.dim_ass(bg, 0.22) end
+            alpha = hov and '10' or '35'
+        elseif hov then
+            -- 悬停色维持原来的土黄（用户 m06925：亮蓝只留给"抓手已激活"，悬停不必另开一套颜色）
+            bg, alpha = '&H3C6E9E&', '10'
+        elseif dis then
+            bg, alpha = '&H333333&', '12'
+        end
+        lines[#lines + 1] = UI.rect_line(x, y, bw, bh, bg, alpha)
+        local fg, oc = '&HFFFFFF&', '&H000000&'
+        if a.color then fg, oc = UI.swatch_colors(a.color) end
+        if dis then fg, oc = '&H8A8A8A&', '&H000000&' end
+
+        lines[#lines + 1] = UI.text_line(x + math.floor((bw - tw) / 2), y + pad, size, fg, a.label, hov, oc)
+        x = x + bw + gap
+    end
+    return y + bh + gap
+end
+
+UI.panel_draw = function(cfg, left, top)
+    cfg.left = left
+    local size, pad, bh, gap = cfg.size, cfg.pad, cfg.bh, cfg.gap
+    local lines, buttons = {}, {}
+    local y = top + 4
+    -- 第 9 条 r48：标题行最左是拖动抓手 ⠿。拖动中它变高亮、标题改成"怎么放下"的提示，
+    -- 位置随抓手右移（标题宽度按当前文案重算，所以不用外面传 title_w 进来）。
+    local drag = UI.panel_drag
+    local grab_tw = UI.label_px('⠿', size)
+    local grab_w = grab_tw + 2 * pad + 2
+    buttons[#buttons + 1] = { name = 'panel-grab', label = '⠿', x = left + pad, y = y, w = grab_w, h = bh }
+    -- 抓手是唯一用亮蓝表示"已激活"的按钮（用户 m06925 指定）；普通按钮悬停仍是土黄
+    lines[#lines + 1] = UI.rect_line(left + pad, y, grab_w, bh,
+        drag and '&HFFD050&' or '&H333333&', drag and '10' or '35')
+    lines[#lines + 1] = UI.text_line(left + pad + math.floor((grab_w - grab_tw) / 2), y + pad, size,
+        drag and '&HFFFFFF&' or '&HCCCCCC&', '⠿', drag, drag and '&H101418&' or nil)
+    local title_txt = drag and '移动中 · 点 ⠿ 放下 · ESC 取消' or cfg.title
+    local title_w = UI.label_px(title_txt, size) + 2 * pad
+    lines[#lines + 1] = UI.text_line(left + pad + grab_w + gap, y + pad, size,
+        drag and '&HFFD050&' or '&H4DE0FF&', title_txt, true)
+    UI.panel_place(cfg, lines, buttons, cfg.row_title, y, left + pad + grab_w + gap + title_w)   -- 标题行右侧：帮助 / 关闭
+    y = y + bh + gap
+
+    -- 颜色行：8 个色块（数字即 Pr 的颜色索引）；选中项用白色外圈 + 加粗标出
+    local cx = left
+    -- 第 9 条 r48：色块**不走 place()**，所以拖动中的"降饱和度"要在这里单独做 ——
+    -- 涂成灰底会被读成"颜色索引变了"，只把饱和度压下去才是对的
+    local sw_dis = UI.panel_drag
+    for _, a in ipairs(cfg.color_row) do
+        local bw = math.floor(size * 2.9)
+        local chosen = (a.color == S.color)
+        buttons[#buttons + 1] = { name = a.name, label = a.label, x = cx, y = y, w = bw, h = bh }
+        if chosen then
+            lines[#lines + 1] = UI.rect_line(cx - 3, y - 3, bw + 6, bh + 6,
+                sw_dis and '&H9A9A9A&' or '&HFFFFFF&', '0')
+        end
+        local swbg = UI.ass_color(a.color)
+        if sw_dis then swbg = UI.dim_ass(swbg, 0.28) end
+        lines[#lines + 1] = UI.rect_line(cx, y, bw, bh, swbg, chosen and '0' or '40')
+        local fg, oc = UI.swatch_colors(a.color)
+        if sw_dis then fg, oc = '&H8E8E8E&', '&H000000&' end
+        lines[#lines + 1] = UI.text_line(cx + pad, y + pad, size, fg,
+            string.format('%d %s', a.color, a.label), chosen and not sw_dis, oc)
+        cx = cx + bw + gap
+    end
+    y = y + bh + gap
+
+    y = UI.panel_place(cfg, lines, buttons, cfg.row_main, y)
+    y = UI.panel_place(cfg, lines, buttons, cfg.row_extra, y)
+    return lines, buttons
+end
+
+-- 首遍（left/top 取 0）：只量内容宽高
+UI.panel_measure = function(cfg)
+    local _, bs = UI.panel_draw(cfg, 0, 0)
+    local pw, ph = 0, cfg.total_h
+    for _, b in ipairs(bs) do
+        if b.x + b.w > pw then pw = b.x + b.w end
+        if b.y + b.h > ph then ph = b.y + b.h end
+    end
+    return pw + cfg.pad, ph + 4
+end
+
 local function render_panel()
     local w, h = osd_size()
     if not UI.panel then
-        panel_sections_off()
+        UI.panel_sections_off()
         PANEL_BUTTONS = {}
         set_overlay(overlay_panel, nil, w, h)
         return
@@ -1954,13 +2079,13 @@ local function render_panel()
         local by = h - bw - math.max(24, math.floor(h * 0.06))
         local hovered = (UI.hover == 'panel-min')
         local lines = {
-            rect_line(bx, by, bw, bw, hovered and '&H3C6E9E&' or '&H333333&', hovered and '10' or '35'),
-            text_line(bx + pad, by + math.floor((bw - size) / 2), size, '&HFFFFFF&', '＋', hovered),
+            UI.rect_line(bx, by, bw, bw, hovered and '&H3C6E9E&' or '&H333333&', hovered and '10' or '35'),
+            UI.text_line(bx + pad, by + math.floor((bw - size) / 2), size, '&HFFFFFF&', '＋', hovered),
         }
         set_overlay(overlay_panel, lines, w, h)
         local b = { name = 'panel-min', label = '＋', x = bx, y = by, w = bw, h = bw }
         UI.panel_geom = { x = bx, y = by, w = bw, h = bw, min = true }
-        panel_sections_off()          -- 第 9 条 r48：别让最小化前的按钮命中区残留
+        UI.panel_sections_off()          -- 第 9 条 r48：别让最小化前的按钮命中区残留
         PANEL_BUTTONS = { b }
         b.section = 'sm_panel_panel_min'
         mp.commandv('define-section', b.section, 'mbtn_left script-binding ' .. BIND_PREFIX .. b.name, 'force')
@@ -1975,7 +2100,7 @@ local function render_panel()
     for _, a in ipairs(ACTIONS) do
         if a.color then color_row[#color_row + 1] = a
         elseif a.name == 'panel-grab' then
-            -- 抓手单独画在标题行最左，不进 row_title（见 draw 里的标题行部分）
+            -- 抓手单独画在标题行最左，不进 row_title（见 panel_draw 里的标题行部分）
         elseif a.name == 'help' or a.name == 'toggle-panel' or a.name == 'panel-min' then
             row_title[#row_title + 1] = a
         elseif #row_main < 5 then row_main[#row_main + 1] = a
@@ -1984,89 +2109,18 @@ local function render_panel()
 
     local title = string.format('Source Markers ｜ 颜色 %d %s ｜ %d 个标记',
         S.color, color_name(S.color), #S.markers)
-    -- 标题宽度不在这里算：拖动时标题文案会变（"移动中…"），宽度由 draw() 内部按当前文案算
+    -- 标题宽度不在这里算：拖动时标题文案会变（"移动中…"），宽度由 panel_draw 按当前文案算
 
     -- 竖向位置：默认自动抬到 mpv 进度条（OSC）上方；行高按 4 行算，正式值在量完内容后修正
     local total_h = bh * 4 + gap * 5 + 8
 
-    -- 第 9 条 r48：布局抽成 draw(left, top)，面板真实宽度取「按钮右边界」而不是标签估算公式
+    -- 第 9 条 r48：布局在 panel_draw 里按「按钮右边界」量真实宽度，不再用标签估算公式
     -- （估算值比实际渲染宽 1.5 倍以上 ⇒ 背景框画到窗口外、panel_clamp 以为面板永远比窗口宽、横向拖动失效）。
     -- 先空跑一遍量宽 → 按真实宽度定位并夹紧 → 再正式画一遍。
-    local function draw(left, top)
-        local lines, buttons = {}, {}
-        local function place(list, y, start_x)
-            local x = start_x or left
-            for _, a in ipairs(list) do
-                -- 第 9 条 r48：宽度 = 实测字宽 + 左右各 pad（+2 是抗四舍五入的余量），文字按 (bw-tw)/2 居中
-                local tw = UI.label_px(a.label, size)
-                local bw = tw + 2 * pad + 2
-                local hovered = (UI.hover == a.name)
-                -- 第 9 条 r48：拖动中其它按钮的命中区已整体关掉，视觉上也要跟上（灰字 + 淡底），
-                -- 否则用户会以为还能点，点下去却没反应
-                local dis = UI.panel_drag and a.name ~= 'panel-grab'
-                buttons[#buttons + 1] = { name = a.name, label = a.label, x = x, y = y, w = bw, h = bh }
-                local bg = a.color and ass_color(a.color) or (hovered and not dis and '&H3C6E9E&' or '&H333333&')
-                lines[#lines + 1] = rect_line(x, y, bw, bh, bg, dis and '12' or (hovered and '10' or '35'))
-                local fg, oc = '&HFFFFFF&', '&H000000&'
-                if a.color then fg, oc = swatch_colors(a.color) end
-                if dis then fg, oc = '&H8A8A8A&', '&H000000&' end
-                lines[#lines + 1] = text_line(x + math.floor((bw - tw) / 2), y + pad, size, fg, a.label, hovered and not dis, oc)
-                x = x + bw + gap
-            end
-            return y + bh + gap
-        end
-
-        local y = top + 4
-        -- 第 9 条 r48：标题行最左是拖动抓手 ⠿。拖动中它变高亮、标题改成"怎么放下"的提示，
-        -- 位置随抓手右移（标题宽度按当前文案重算，所以不用外面传 title_w 进来）。
-        local drag = UI.panel_drag
-        local grab_tw = UI.label_px('⠿', size)
-        local grab_w = grab_tw + 2 * pad + 2
-        buttons[#buttons + 1] = { name = 'panel-grab', label = '⠿', x = left + pad, y = y, w = grab_w, h = bh }
-        lines[#lines + 1] = rect_line(left + pad, y, grab_w, bh,
-            drag and '&H3C6E9E&' or '&H333333&', drag and '10' or '35')
-        lines[#lines + 1] = text_line(left + pad + math.floor((grab_w - grab_tw) / 2), y + pad, size,
-            drag and '&HFFFFFF&' or '&HCCCCCC&', '⠿')
-        local title_txt = drag and '移动中 · 点 ⠿ 放下 · ESC 取消' or title
-        local title_w = UI.label_px(title_txt, size) + 2 * pad
-        lines[#lines + 1] = text_line(left + pad + grab_w + gap, y + pad, size,
-            drag and '&HFFD050&' or '&H4DE0FF&', title_txt, true)
-        place(row_title, y, left + pad + grab_w + gap + title_w)   -- 标题行右侧：帮助 / 关闭
-        y = y + bh + gap
-
-        -- 颜色行：8 个色块（数字即 Pr 的颜色索引）；选中项用白色外圈 + 加粗标出
-        local cx = left
-        for _, a in ipairs(color_row) do
-            local bw = math.floor(size * 2.9)
-            local chosen = (a.color == S.color)
-            buttons[#buttons + 1] = { name = a.name, label = a.label, x = cx, y = y, w = bw, h = bh }
-            if chosen then
-                lines[#lines + 1] = rect_line(cx - 3, y - 3, bw + 6, bh + 6, '&HFFFFFF&', '0')
-            end
-            lines[#lines + 1] = rect_line(cx, y, bw, bh, ass_color(a.color), chosen and '0' or '40')
-            local fg, oc = swatch_colors(a.color)
-            lines[#lines + 1] = text_line(cx + pad, y + pad, size, fg,
-                string.format('%d %s', a.color, a.label), chosen, oc)
-            cx = cx + bw + gap
-        end
-        y = y + bh + gap
-
-        y = place(row_main, y)
-        y = place(row_extra, y)
-        return lines, buttons
-    end
-
-    -- 首遍（left/top 取 0）：只量内容宽高
-    local function measure()
-        local _, bs = draw(0, 0)
-        local pw, ph = 0, total_h
-        for _, b in ipairs(bs) do
-            if b.x + b.w > pw then pw = b.x + b.w end
-            if b.y + b.h > ph then ph = b.y + b.h end
-        end
-        return pw + pad, ph + 4
-    end
-    local panel_w, content_h = measure()
+    local cfg = { size = size, pad = pad, bh = bh, gap = gap, title = title,
+        row_main = row_main, row_extra = row_extra, color_row = color_row, row_title = row_title,
+        total_h = total_h }
+    local panel_w, content_h = UI.panel_measure(cfg)
     -- 第 9 条 r48：面板比窗口还宽时按比例缩字号（按钮矩形由字号算出，所以宽随字号线性缩）。
     -- 缩到 12 px 仍溢出就只能让它溢出（再挤会看不清字），此时夹紧退化为贴左。
     local max_w = math.max(240, w - 24)
@@ -2080,9 +2134,11 @@ local function render_panel()
         bh = size + 2 * pad
         gap = math.max(3, math.floor(size * 0.35))
         total_h = bh * 4 + gap * 5 + 8
-        panel_w, content_h = measure()
+        cfg.size, cfg.pad, cfg.bh, cfg.gap, cfg.total_h = size, pad, bh, gap, total_h
+        panel_w, content_h = UI.panel_measure(cfg)
     end
     total_h = content_h
+    cfg.total_h = total_h
 
     local bottom_opt = tonumber(o.panel_bottom) or 0
     local margin = (bottom_opt > 0) and bottom_opt or math.max(90, math.floor(h * 0.20))
@@ -2104,8 +2160,8 @@ local function render_panel()
     UI.panel_geom = { x = left, y = top, w = panel_w, h = total_h, min = false, osd_w = w, osd_h = h,
         grab = { x = left + pad, y = top + 4, w = UI.label_px('⠿', size) + 2 * pad + 2, h = bh } }
 
-    local lines, buttons = draw(left, top)
-    table.insert(lines, 1, rect_line(left - 12, top - 10, panel_w + 24, total_h + 16, '&H141414&', '25'))
+    local lines, buttons = UI.panel_draw(cfg, left, top)
+    table.insert(lines, 1, UI.rect_line(left - 12, top - 10, panel_w + 24, total_h + 16, '&H141414&', '25'))
 
     set_overlay(overlay_panel, lines, w, h)
 
@@ -2119,7 +2175,7 @@ local function render_panel()
 
     -- 注册鼠标区域：每个按钮一个 input section（set_mouse_area 是按 section 生效的）
     -- 第 9 条 r48：先关掉上一轮的所有命中区（拖动时还要靠它把其它按钮整体禁掉）
-    panel_sections_off()
+    UI.panel_sections_off()
     PANEL_BUTTONS = buttons
     for _, b in ipairs(buttons) do
         b.section = 'sm_panel_' .. b.name:gsub('[^%w]', '_')
@@ -2142,20 +2198,30 @@ UI.panel_grab_toggle = function()
     if UI.panel_drag then
         UI.panel_drag = false
         UI.panel_drag_from = nil
+        UI.panel_drag_off = nil
         notify('面板拖动：已放下')
     else
         local g = UI.panel_geom
         UI.panel_drag = true
         UI.panel_drag_from = g and { x = g.x, y = g.y } or nil
+        -- R48-3：记住「面板左上角 相对 鼠标」的偏移，跟随期间保持它，⠿ 才会稳稳钉在鼠标下。
+        -- 用 Alt+F3 抓起时鼠标可能不在抓手上面，同样按当前鼠标位置起算（不会跳）。
+        local mp_pos = mp.get_property_native('mouse-pos')
+        if g and type(mp_pos) == 'table' then
+            UI.panel_drag_off = { dx = (tonumber(mp_pos.x) or 0) - g.x,
+                                  dy = (tonumber(mp_pos.y) or 0) - g.y }
+        else
+            UI.panel_drag_off = nil
+        end
         notify('面板拖动：点 ⠿ 放下 · ESC 取消')
     end
+    render_panel()
     local g = UI.panel_geom
     log('面板拖动 %s（面板 %s,%s 尺寸 %sx%s；抓手 框=%s,%s %sx%s）',
         UI.panel_drag and '抓起' or '放下', g and g.x or '?', g and g.y or '?',
         g and g.w or '?', g and g.h or '?',
         g and g.grab and g.grab.x or '?', g and g.grab and g.grab.y or '?',
         g and g.grab and g.grab.w or '?', g and g.grab and g.grab.h or '?')
-    render_panel()
 end
 UI.panel_grab_cancel = function()
     if not UI.panel_drag then return false end
@@ -2163,6 +2229,7 @@ UI.panel_grab_cancel = function()
     if UI.panel_drag_from then UI.panel_pos = { UI.panel_drag_from[1] or UI.panel_drag_from.x,
         UI.panel_drag_from[2] or UI.panel_drag_from.y } end
     UI.panel_drag_from = nil
+    UI.panel_drag_off = nil
     notify('已取消拖动，面板回到原位')
     log('面板拖动 取消（回原位）')
     render_panel()
@@ -3934,6 +4001,7 @@ local function toggle_panel_min(state)
     if not UI.panel then ui_set_shown('panel', true) end     -- 面板没开时点 − 先把它打开
     UI.panel_drag = false                                    -- 第 9 条 r48：最小化/还原一律结束拖动
     UI.panel_drag_from = nil
+    UI.panel_drag_off = nil
     UI.panel_min = (state == nil) and (not UI.panel_min) or (state == true)
     render_panel()
     if save_ui_state then save_ui_state() end
@@ -3959,7 +4027,7 @@ local function toggle_panel(state)
     local on = (state == nil) and (not ui_style_shown(style)) or (state == true)
     ui_set_shown(style, on)
     if not on then UI.panel_min = false end    -- 关闭时"最小化"没有意义，下次打开按完整面板算
-    if not on then UI.panel_drag = false; UI.panel_drag_from = nil end   -- 第 9 条 r48：关面板也结束拖动
+    if not on then UI.panel_drag = false; UI.panel_drag_from = nil; UI.panel_drag_off = nil end   -- 第 9 条 r48：关面板也结束拖动
     render_panel()
     render_prbar()
     render_timeline()
@@ -4455,6 +4523,24 @@ local MOUSE_LOG_AT, MOUSE_LAST = 0, { -1, -1 }
 local function on_mouse_pos(_, pos)
     if (not UI.panel and not UI.bar) or type(pos) ~= 'table' then return end
     local mx, my = tonumber(pos.x) or 0, tonumber(pos.y) or 0
+    -- 第 9 条 r48-3：拖动中按鼠标跟随。保持抓起时的 (dx,dy) 偏移，面板左上角 = 鼠标 - 偏移；
+    -- 位置交给 render_panel 里的 panel_clamp 夹紧 ⇒ 触边后 ⠿ 停住、鼠标继续外走也不再动。
+    -- 16 ms 节流：mouse-pos 事件比 60 Hz 密时不必每次都重画 + 重注册 40 个 input section。
+    if UI.panel_drag and UI.panel and UI.panel_drag_off then
+        local tnow = os.clock()
+        if not UI.drag_at or tnow - UI.drag_at >= 0.016 then
+            UI.drag_at = tnow
+            UI.panel_pos = { mx - UI.panel_drag_off.dx, my - UI.panel_drag_off.dy }
+            render_panel()
+            if tnow - (UI.drag_log_at or 0) > 0.25 then
+                UI.drag_log_at = tnow
+                local gg = UI.panel_geom
+                log('面板跟随 鼠标 %d,%d → 面板 %s,%s（偏移 %d,%d）', mx, my,
+                    gg and gg.x or '?', gg and gg.y or '?',
+                    math.floor(UI.panel_drag_off.dx + 0.5), math.floor(UI.panel_drag_off.dy + 0.5))
+            end
+        end
+    end
     local hit = nil
     local lists = UI.bar and PRBAR_BUTTONS or PANEL_BUTTONS
     for _, b in ipairs(lists) do

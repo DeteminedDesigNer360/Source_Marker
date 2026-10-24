@@ -17,8 +17,9 @@ $ErrorActionPreference = 'Stop'
 if (-not $Root) { $Root = Split-Path -Parent $PSScriptRoot }
 
 $bom = [byte[]](0xEF, 0xBB, 0xBF)
+# _tmp 是临时作业区（.gitignore 已排除），里面的探针脚本不入库，不必要求 BOM
 $files = Get-ChildItem -Path $Root -Recurse -Filter '*.ps1' -File |
-  Where-Object { $_.FullName -notmatch '\\verify\\|\\_pkg\\|\\node_modules\\' }
+  Where-Object { $_.FullName -notmatch '\\verify\\|\\_pkg\\|\\node_modules\\|\\_tmp' }
 
 $missing = 0
 foreach ($f in $files) {
