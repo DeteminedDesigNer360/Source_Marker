@@ -1775,6 +1775,30 @@ local function visual_width(s)
     return n
 end
 
+-- 第 9 条 r48：面板/标题文字的**像素**宽度。按字符类别分别给 em 系数，全部是截图实测值：
+--   汉字与全角字母 0.77 em（26 px 字号实测 20 px、17 px 字号实测 13 px）
+--   ASCII 0.62 em（大写字母偏宽；visual_width 记 1 单位 = 0.385 em 会低估 "OSD" 这类）
+--   空格 0.25 em、全角标点（UTF-8 前缀 EF BC / E3 80）0.5 em
+-- visual_width 的「单位」口径留给折行用，这里算的是真正要占的像素，两者不能混。
+UI.label_px = function(s, size)
+    local px, i = 0, 1
+    while i <= #s do
+        local b = s:byte(i)
+        if b < 0x80 then
+            px = px + ((b == 32) and 0.25 or 0.62) * size
+            i = i + 1
+        else
+            local len = 3
+            if b >= 0xF0 then len = 4
+            elseif b >= 0xC0 and b < 0xE0 then len = 2 end
+            local punct = (b == 0xEF and s:byte(i+1) == 0xBC) or (b == 0xE3 and s:byte(i+1) == 0x80)
+            px = px + (punct and 0.5 or 0.77) * size
+            i = i + len
+        end
+    end
+    return math.floor(px + 0.5)
+end
+
 -- 文本折行：先按显式 "\n" 切成段落，再按视觉宽度折（视觉宽度用上面的 visual_width 口径）。
 -- 4(c) 修复：帮助里有些说明比面板框还宽（F10 那条最明显），原先一行画出去会被裁掉/溢出。
 local function wrap_visual(s, max_units)
@@ -1955,7 +1979,8 @@ local function render_panel()
 
     local title = string.format('Source Markers ｜ 颜色 %d %s ｜ %d 个标记',
         S.color, color_name(S.color), #S.markers)
-    local title_w = math.floor(visual_width(title) * size * 0.5) + 2 * pad
+    -- 第 9 条 r48：标题宽度按实测像素算（见 UI.label_px 的系数表）
+    local title_w = UI.label_px(title, size) + 2 * pad
 
     -- 竖向位置：默认自动抬到 mpv 进度条（OSC）上方；行高按 4 行算，正式值在量完内容后修正
     local total_h = bh * 4 + gap * 5 + 8
@@ -1968,10 +1993,8 @@ local function render_panel()
         local function place(list, y, start_x)
             local x = start_x or left
             for _, a in ipairs(list) do
-                -- 第 9 条 r48：宽度 = 实际字宽 + 左右各 pad（+2 是抗四舍五入的余量）。
-                -- ass 里 1 个"显示单位"就是 0.5 em（visual_width 对汉字记 2、半角记 1），
-                -- 所以系数是 0.5，而不是估出来的 0.58 再加 2.6 个字余量；文字起点再加 pad 就是正中
-                local tw = math.floor(visual_width(a.label) * size * 0.5)
+                -- 第 9 条 r48：宽度 = 实测字宽 + 左右各 pad（+2 是抗四舍五入的余量），文字按 (bw-tw)/2 居中
+                local tw = UI.label_px(a.label, size)
                 local bw = tw + 2 * pad + 2
                 local hovered = (UI.hover == a.name)
                 buttons[#buttons + 1] = { name = a.name, label = a.label, x = x, y = y, w = bw, h = bh }
@@ -2035,7 +2058,7 @@ local function render_panel()
         pad = math.max(4, math.floor(size * 0.4))
         bh = size + 2 * pad
         gap = math.max(3, math.floor(size * 0.35))
-        title_w = math.floor(visual_width(title) * size * 0.5) + 2 * pad
+        title_w = UI.label_px(title, size) + 2 * pad
         total_h = bh * 4 + gap * 5 + 8
         panel_w, content_h = measure()
     end
