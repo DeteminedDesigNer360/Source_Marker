@@ -1955,7 +1955,7 @@ local function render_panel()
 
     local title = string.format('Source Markers ｜ 颜色 %d %s ｜ %d 个标记',
         S.color, color_name(S.color), #S.markers)
-    local title_w = math.floor(visual_width(title) * size * 0.56) + 3 * pad
+    local title_w = math.floor(visual_width(title) * size * 0.5) + 3 * pad
 
     -- 竖向位置：默认自动抬到 mpv 进度条（OSC）上方；行高按 4 行算，正式值在量完内容后修正
     local total_h = bh * 4 + gap * 5 + 8
@@ -1968,7 +1968,9 @@ local function render_panel()
         local function place(list, y, start_x)
             local x = start_x or left
             for _, a in ipairs(list) do
-                local bw = math.floor(size * (visual_width(a.label) * 0.58 + 2.6)) + 2 * pad
+                -- 第 9 条 r48：宽度 = 实际字宽 + 内边距。ass 里 1 个"显示单位"就是 0.5 em
+                -- （visual_width 对汉字记 2、半角记 1），所以系数是 0.5，而不是估出来的 0.58 再加 2.6 个字余量
+                local bw = math.floor(visual_width(a.label) * size * 0.5) + 2 * pad + 4
                 local hovered = (UI.hover == a.name)
                 buttons[#buttons + 1] = { name = a.name, label = a.label, x = x, y = y, w = bw, h = bh }
                 local bg = a.color and ass_color(a.color) or (hovered and '&H3C6E9E&' or '&H333333&')
@@ -2031,7 +2033,7 @@ local function render_panel()
         pad = math.max(4, math.floor(size * 0.4))
         bh = size + 2 * pad
         gap = math.max(3, math.floor(size * 0.35))
-        title_w = math.floor(visual_width(title) * size * 0.56) + 3 * pad
+        title_w = math.floor(visual_width(title) * size * 0.5) + 3 * pad
         total_h = bh * 4 + gap * 5 + 8
         panel_w, content_h = measure()
     end
