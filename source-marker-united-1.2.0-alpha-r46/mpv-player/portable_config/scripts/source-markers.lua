@@ -2189,6 +2189,47 @@ local function render_panel()
     end
 end
 
+-- 第 9 条 r48-3 补丁：鼠标移出窗口就放下（用户 m07069 选的口径：贴边且静止约 0.4 s 判定出窗）。
+-- 为什么必须靠定时器：mpv 的 Lua 拿不到「鼠标在窗口外」的信号 —— 鼠标一离开窗口，mpv 就把
+-- mouse-pos 钳在窗口边缘（实测注入到窗口外 1300,300，收到的是 700,437 这种贴边值），之后**不再发事件**。
+-- 所以「贴边 + 属性值不再变化」只能主动轮询，事件驱动做不到。
+UI.panel_drag_timer_disarm = function()
+    if UI.drag_edge_timer then UI.drag_edge_timer:kill(); UI.drag_edge_timer = nil end
+    UI.drag_edge_at = nil
+end
+UI.panel_drag_edge_check = function()
+    if not UI.panel_drag then UI.panel_drag_timer_disarm(); return end
+    -- 判定口径只能用「事件是否停止」，不能用坐标：实测这台机器上 mouse-pos 在窗口内是
+    -- 物理像素（逻辑 100,100 报 175,175 = ×1.75），鼠标出窗后却被钳成逻辑像素（报 721,448），
+    -- 两套单位混在一起，任何比例/边界比较都会失真。而「出窗后 mpv 不再发 mouse-pos 事件」
+    -- 是可靠的：拖动中只要 0.6 s 收不到任何鼠标事件，就当作鼠标已经离开窗口。
+    -- 代价：抓着面板原地不动超过 0.6 s 也会被放下（位置保留，可再抓起）。
+    -- 抓起后还没动过就不计时：否则点完 ⠿ 停 0.6 s 也会被放下（真人常有点完再瞄一眼的情况）
+    local last = UI.drag_last_at
+    if not last or not UI.drag_moved then return end
+    if mp.get_time() - last >= 0.6 then
+        UI.panel_drag_drop('鼠标已移出窗口')
+    end
+end
+UI.panel_drag_timer_arm = function()
+    UI.panel_drag_timer_disarm()
+    UI.drag_edge_timer = mp.add_periodic_timer(0.15, function() UI.panel_drag_edge_check() end)
+    UI.drag_edge_first = nil
+    log('出窗轮询 启动 每 0.15 s')
+end
+-- 放下（位置保留）。与 ESC 的「取消回原位」相区别：出窗自动放下走这里。
+UI.panel_drag_drop = function(reason)
+    if not UI.panel_drag then return false end
+    UI.panel_drag = false
+    UI.panel_drag_from = nil
+    UI.panel_drag_off = nil
+    UI.panel_drag_timer_disarm()
+    notify('面板拖动：' .. (reason or '已放下'))
+    render_panel()
+    local g = UI.panel_geom
+    log('面板拖动 放开（%s；面板 %s,%s）', reason or '手动', g and g.x or '?', g and g.y or '?')
+    return true
+end
 -- 第 9 条 r48：面板拖动状态机。mpv 只给 mouse-down、没有 mouse-up，所以拖动是"点-移动-点"：
 -- 点标题行左侧的 ⠿ 抓起（此时其它按钮的 input section 全关，防误触打标记），
 -- 再点 ⠿ 放下；ESC 取消并回到抓起前的位置。真正的鼠标跟随在 R48-3。
@@ -2199,6 +2240,7 @@ UI.panel_grab_toggle = function()
         UI.panel_drag = false
         UI.panel_drag_from = nil
         UI.panel_drag_off = nil
+        UI.panel_drag_timer_disarm()
         notify('面板拖动：已放下')
     else
         local g = UI.panel_geom
@@ -2213,7 +2255,10 @@ UI.panel_grab_toggle = function()
         else
             UI.panel_drag_off = nil
         end
+        UI.drag_last_at = mp.get_time()
+        UI.drag_moved = nil
         notify('面板拖动：点 ⠿ 放下 · ESC 取消')
+        UI.panel_drag_timer_arm()          -- 出窗轮询：0.6 s 收不到鼠标事件就自动放下
     end
     render_panel()
     local g = UI.panel_geom
@@ -2230,6 +2275,7 @@ UI.panel_grab_cancel = function()
         UI.panel_drag_from[2] or UI.panel_drag_from.y } end
     UI.panel_drag_from = nil
     UI.panel_drag_off = nil
+    UI.panel_drag_timer_disarm()
     notify('已取消拖动，面板回到原位')
     log('面板拖动 取消（回原位）')
     render_panel()
@@ -4002,6 +4048,7 @@ local function toggle_panel_min(state)
     UI.panel_drag = false                                    -- 第 9 条 r48：最小化/还原一律结束拖动
     UI.panel_drag_from = nil
     UI.panel_drag_off = nil
+    UI.panel_drag_timer_disarm()
     UI.panel_min = (state == nil) and (not UI.panel_min) or (state == true)
     render_panel()
     if save_ui_state then save_ui_state() end
@@ -4027,7 +4074,7 @@ local function toggle_panel(state)
     local on = (state == nil) and (not ui_style_shown(style)) or (state == true)
     ui_set_shown(style, on)
     if not on then UI.panel_min = false end    -- 关闭时"最小化"没有意义，下次打开按完整面板算
-    if not on then UI.panel_drag = false; UI.panel_drag_from = nil; UI.panel_drag_off = nil end   -- 第 9 条 r48：关面板也结束拖动
+    if not on then UI.panel_drag = false; UI.panel_drag_from = nil; UI.panel_drag_off = nil; UI.panel_drag_timer_disarm() end   -- 第 9 条 r48：关面板也结束拖动
     render_panel()
     render_prbar()
     render_timeline()
@@ -4528,6 +4575,8 @@ local function on_mouse_pos(_, pos)
     -- 16 ms 节流：mouse-pos 事件比 60 Hz 密时不必每次都重画 + 重注册 40 个 input section。
     if UI.panel_drag and UI.panel and UI.panel_drag_off then
         local tnow = os.clock()
+        UI.drag_last_at = mp.get_time()      -- 出窗判定只看它：事件停了 = 鼠标出窗（见 panel_drag_edge_check）
+        UI.drag_moved = true
         if not UI.drag_at or tnow - UI.drag_at >= 0.016 then
             UI.drag_at = tnow
             UI.panel_pos = { mx - UI.panel_drag_off.dx, my - UI.panel_drag_off.dy }
