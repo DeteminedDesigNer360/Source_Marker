@@ -2166,8 +2166,11 @@ local function render_panel()
     set_overlay(overlay_panel, lines, w, h)
 
     -- 首帧把面板几何记一次：上机排查与自动化点击都靠它，不靠猜坐标
-    if not UI.panel_geom_logged then
-        UI.panel_geom_logged = true
+    -- 位置或尺寸一变就记一行（拖动中不记，抓/放另有专门日志）：
+    -- 排查「重启后位置恢复了没有」「窗口变小夹到哪」都靠这条，不靠猜坐标
+    local gkey = string.format('%d,%d,%d,%d', left, top, panel_w, total_h)
+    if (not UI.panel_drag) and UI.panel_geom_key ~= gkey then
+        UI.panel_geom_key = gkey
         local gg = UI.panel_geom and UI.panel_geom.grab
         log('面板几何 面板=%s,%s %sx%s 抓手=%s,%s %sx%s', left, top, panel_w, total_h,
             gg and gg.x or '?', gg and gg.y or '?', gg and gg.w or '?', gg and gg.h or '?')
@@ -2224,6 +2227,7 @@ UI.panel_drag_drop = function(reason)
     UI.panel_drag_from = nil
     UI.panel_drag_off = nil
     UI.panel_drag_timer_disarm()
+    if save_ui_state then save_ui_state() end
     notify('面板拖动：' .. (reason or '已放下'))
     render_panel()
     local g = UI.panel_geom
@@ -2241,8 +2245,20 @@ UI.panel_grab_toggle = function()
         UI.panel_drag_from = nil
         UI.panel_drag_off = nil
         UI.panel_drag_timer_disarm()
+        if save_ui_state then save_ui_state() end       -- R48-4：放下即落盘，重启后还在原位
         notify('面板拖动：已放下')
     else
+        -- R48-4 互斥：最小化只剩一个小方块（没有抓手）、面板没开时没有可拖的东西
+        if UI.panel_min then
+            log('面板拖动 拒绝：最小化状态')
+            notify('最小化状态不能拖动面板，先点 ＋ 还原')
+            return
+        end
+        if not UI.panel then
+            log('面板拖动 拒绝：面板未显示')
+            notify('面板没显示，按 F2 或点显示后再拖')
+            return
+        end
         local g = UI.panel_geom
         UI.panel_drag = true
         UI.panel_drag_from = g and { x = g.x, y = g.y } or nil
@@ -2276,6 +2292,7 @@ UI.panel_grab_cancel = function()
     UI.panel_drag_from = nil
     UI.panel_drag_off = nil
     UI.panel_drag_timer_disarm()
+    if save_ui_state then save_ui_state() end
     notify('已取消拖动，面板回到原位')
     log('面板拖动 取消（回原位）')
     render_panel()
