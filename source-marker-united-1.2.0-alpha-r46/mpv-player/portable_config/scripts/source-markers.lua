@@ -1690,7 +1690,10 @@ load_key_overrides()   -- 第 5 条：先读键位覆盖表，后面注册绑定
 -- panel / bar 是两个样式各自的「是否显示」；互斥由 ui_set_shown() 统一保证。
 local UI = { help = false, panel = o.panel == true, hover = nil, hint_shown = false, mode = false,
              style = 'panel', bar = false,
-             panel_min = false }   -- 第 9 条 r47：按钮面板"最小化"（缩成左下角一个小方块）
+             panel_min = false,    -- 第 9 条 r47：按钮面板"最小化"（缩成左下角一个小方块）
+             panel_pos = nil }     -- 第 9 条 r48：按钮面板的自由位置 {x,y}（窗口像素）；nil = 仍按 panel_anchor
+-- 第 9 条 r48：上次渲染出的面板几何 {x,y,w,h} 存在 UI.panel_geom 里 —— 主 chunk 的局部变量已到
+-- Lua 5.1 的 200 个上限（:4472 报 "main function has more than 200 local variables"），新东西不能再开 local
 local PANEL_BUTTONS = {}          -- 渲染后填充：{name,label,x,y,w,h,section}
 local PRBAR_BUTTONS = {}          -- 第 8 条：控制栏按钮的命中框（渲染后填充）
 local SIDE_PADDING = 40
@@ -1892,6 +1895,17 @@ local function panel_sections_off()
     end
 end
 
+-- 第 9 条 r48：面板位置的**唯一**夹紧口径 —— 背景框是 (left-12, top-10, panel_w+24, total_h+16)，
+-- 这里保证整个背景框不出窗口；窗口比面板还小时退化贴左上（下界 > 上界时取上界，不能再往外顶）。
+UI.panel_clamp = function(left, top, w, h, pw, ph)
+    local pad_l, pad_t = 12, 10
+    local maxl = math.max(pad_l, w - pw - pad_l)
+    local maxt = math.max(pad_t, h - ph - pad_t)
+    left = math.max(pad_l, math.min(math.floor(left + 0.5), maxl))
+    top = math.max(pad_t, math.min(math.floor(top + 0.5), maxt))
+    return left, top
+end
+
 local function render_panel()
     local w, h = osd_size()
     if not UI.panel then
@@ -1919,6 +1933,7 @@ local function render_panel()
         }
         set_overlay(overlay_panel, lines, w, h)
         local b = { name = 'panel-min', label = '＋', x = bx, y = by, w = bw, h = bw }
+        UI.panel_geom = { x = bx, y = by, w = bw, h = bw, min = true }
         PANEL_BUTTONS = { b }
         b.section = 'sm_panel_panel_min'
         mp.commandv('define-section', b.section, 'mbtn_left script-binding ' .. BIND_PREFIX .. b.name, 'force')
@@ -1941,75 +1956,107 @@ local function render_panel()
     local title = string.format('Source Markers ｜ 颜色 %d %s ｜ %d 个标记',
         S.color, color_name(S.color), #S.markers)
     local title_w = math.floor(visual_width(title) * size * 0.56) + 3 * pad
-    local color_w = #color_row * math.floor(size * 2.9) + (#color_row - 1) * gap
-    local function row_w(list)
-        local total = 0
-        for _, a in ipairs(list) do
-            total = total + math.floor(size * (visual_width(a.label) * 0.58 + 2.6)) + 2 * pad + gap
-        end
-        return total > 0 and total - gap or 0
-    end
-    local panel_w = math.max(title_w + row_w(row_title), color_w, row_w(row_main), row_w(row_extra)) + 2 * pad
 
-    -- 竖向位置：默认自动抬到 mpv 进度条（OSC）上方
-    local rows_n = 4
-    local total_h = bh * rows_n + gap * (rows_n + 1) + 8
+    -- 竖向位置：默认自动抬到 mpv 进度条（OSC）上方；行高按 4 行算，正式值在量完内容后修正
+    local total_h = bh * 4 + gap * 5 + 8
+
+    -- 第 9 条 r48：布局抽成 draw(left, top)，面板真实宽度取「按钮右边界」而不是标签估算公式
+    -- （估算值比实际渲染宽 1.5 倍以上 ⇒ 背景框画到窗口外、panel_clamp 以为面板永远比窗口宽、横向拖动失效）。
+    -- 先空跑一遍量宽 → 按真实宽度定位并夹紧 → 再正式画一遍。
+    local function draw(left, top)
+        local lines, buttons = {}, {}
+        local function place(list, y, start_x)
+            local x = start_x or left
+            for _, a in ipairs(list) do
+                local bw = math.floor(size * (visual_width(a.label) * 0.58 + 2.6)) + 2 * pad
+                local hovered = (UI.hover == a.name)
+                buttons[#buttons + 1] = { name = a.name, label = a.label, x = x, y = y, w = bw, h = bh }
+                local bg = a.color and ass_color(a.color) or (hovered and '&H3C6E9E&' or '&H333333&')
+                lines[#lines + 1] = rect_line(x, y, bw, bh, bg, hovered and '10' or '35')
+                local fg, oc = '&HFFFFFF&', '&H000000&'
+                if a.color then fg, oc = swatch_colors(a.color) end
+                lines[#lines + 1] = text_line(x + pad, y + pad, size, fg, a.label, hovered, oc)
+                x = x + bw + gap
+            end
+            return y + bh + gap
+        end
+
+        local y = top + 4
+        lines[#lines + 1] = text_line(left + pad, y + pad, size, '&H4DE0FF&', title, true)
+        place(row_title, y, left + pad + title_w)          -- 标题行右侧：帮助 / 关闭
+        y = y + bh + gap
+
+        -- 颜色行：8 个色块（数字即 Pr 的颜色索引）；选中项用白色外圈 + 加粗标出
+        local cx = left
+        for _, a in ipairs(color_row) do
+            local bw = math.floor(size * 2.9)
+            local chosen = (a.color == S.color)
+            buttons[#buttons + 1] = { name = a.name, label = a.label, x = cx, y = y, w = bw, h = bh }
+            if chosen then
+                lines[#lines + 1] = rect_line(cx - 3, y - 3, bw + 6, bh + 6, '&HFFFFFF&', '0')
+            end
+            lines[#lines + 1] = rect_line(cx, y, bw, bh, ass_color(a.color), chosen and '0' or '40')
+            local fg, oc = swatch_colors(a.color)
+            lines[#lines + 1] = text_line(cx + pad, y + pad, size, fg,
+                string.format('%d %s', a.color, a.label), chosen, oc)
+            cx = cx + bw + gap
+        end
+        y = y + bh + gap
+
+        y = place(row_main, y)
+        y = place(row_extra, y)
+        return lines, buttons
+    end
+
+    -- 首遍（left/top 取 0）：只量内容宽高
+    local function measure()
+        local _, bs = draw(0, 0)
+        local pw, ph = 0, total_h
+        for _, b in ipairs(bs) do
+            if b.x + b.w > pw then pw = b.x + b.w end
+            if b.y + b.h > ph then ph = b.y + b.h end
+        end
+        return pw + pad, ph + 4
+    end
+    local panel_w, content_h = measure()
+    -- 第 9 条 r48：面板比窗口还宽时按比例缩字号（按钮矩形由字号算出，所以宽随字号线性缩）。
+    -- 缩到 12 px 仍溢出就只能让它溢出（再挤会看不清字），此时夹紧退化为贴左。
+    local max_w = math.max(240, w - 24)
+    local shrink = 0
+    while panel_w > max_w and size > 12 and shrink < 8 do
+        shrink = shrink + 1
+        -- 每次至少减 1 px：宽度对字号是阶梯函数，纯按比例算可能原地不动
+        local ns = math.max(12, math.min(size - 1, math.floor(size * max_w / panel_w)))
+        size = ns
+        pad = math.max(4, math.floor(size * 0.4))
+        bh = size + 2 * pad
+        gap = math.max(3, math.floor(size * 0.35))
+        title_w = math.floor(visual_width(title) * size * 0.56) + 3 * pad
+        total_h = bh * 4 + gap * 5 + 8
+        panel_w, content_h = measure()
+    end
+    total_h = content_h
+
     local bottom_opt = tonumber(o.panel_bottom) or 0
     local margin = (bottom_opt > 0) and bottom_opt or math.max(90, math.floor(h * 0.20))
     local anchor = tostring(o.panel_anchor or 'bottom-left')
     local top, left
-    if anchor == 'top-left' or anchor == 'top-right' then
+    local pp = UI.panel_pos
+    if type(pp) == 'table' and tonumber(pp[1]) and tonumber(pp[2]) then
+        -- 第 9 条 r48：有自由位置就优先用它（拖动后 / 上次会话记住的位置）
+        left, top = tonumber(pp[1]), tonumber(pp[2])
+    elseif anchor == 'top-left' or anchor == 'top-right' then
         top = math.max(SIDE_PADDING, math.floor(h * 0.06))
         left = (anchor == 'top-right') and math.max(SIDE_PADDING, w - x0 - panel_w) or x0
     else
         top = h - margin - total_h
         left = (anchor == 'bottom-right') and math.max(SIDE_PADDING, w - x0 - panel_w) or x0
     end
-    if top < SIDE_PADDING then top = SIDE_PADDING end
-    if left + panel_w > w - 10 then left = math.max(10, w - panel_w - 10) end
+    left, top = UI.panel_clamp(left, top, w, h, panel_w, total_h)
+    UI.panel_geom = { x = left, y = top, w = panel_w, h = total_h, min = false, osd_w = w, osd_h = h }
 
-    local lines = { rect_line(left - 12, top - 10, panel_w + 24, total_h + 16, '&H141414&', '25') }
-    local buttons = {}
-    local function place(list, y, start_x)
-        local x = start_x or left
-        for _, a in ipairs(list) do
-            local bw = math.floor(size * (visual_width(a.label) * 0.58 + 2.6)) + 2 * pad
-            local hovered = (UI.hover == a.name)
-            buttons[#buttons + 1] = { name = a.name, label = a.label, x = x, y = y, w = bw, h = bh }
-            local bg = a.color and ass_color(a.color) or (hovered and '&H3C6E9E&' or '&H333333&')
-            lines[#lines + 1] = rect_line(x, y, bw, bh, bg, hovered and '10' or '35')
-            local fg, oc = '&HFFFFFF&', '&H000000&'
-            if a.color then fg, oc = swatch_colors(a.color) end
-            lines[#lines + 1] = text_line(x + pad, y + pad, size, fg, a.label, hovered, oc)
-            x = x + bw + gap
-        end
-        return y + bh + gap
-    end
-
-    local y = top + 4
-    lines[#lines + 1] = text_line(left + pad, y + pad, size, '&H4DE0FF&', title, true)
-    place(row_title, y, left + pad + title_w)          -- 标题行右侧：帮助 / 关闭
-    y = y + bh + gap
-
-    -- 颜色行：8 个色块（数字即 Pr 的颜色索引）；选中项用白色外圈 + 加粗标出
-    local cx = left
-    for _, a in ipairs(color_row) do
-        local bw = math.floor(size * 2.9)
-        local chosen = (a.color == S.color)
-        buttons[#buttons + 1] = { name = a.name, label = a.label, x = cx, y = y, w = bw, h = bh }
-        if chosen then
-            lines[#lines + 1] = rect_line(cx - 3, y - 3, bw + 6, bh + 6, '&HFFFFFF&', '0')
-        end
-        lines[#lines + 1] = rect_line(cx, y, bw, bh, ass_color(a.color), chosen and '0' or '40')
-        local fg, oc = swatch_colors(a.color)
-        lines[#lines + 1] = text_line(cx + pad, y + pad, size, fg,
-            string.format('%d %s', a.color, a.label), chosen, oc)
-        cx = cx + bw + gap
-    end
-    y = y + bh + gap
-
-    y = place(row_main, y)
-    y = place(row_extra, y)
+    local lines, buttons = draw(left, top)
+    table.insert(lines, 1, rect_line(left - 12, top - 10, panel_w + 24, total_h + 16, '&H141414&', '25'))
 
     set_overlay(overlay_panel, lines, w, h)
 
@@ -4506,6 +4553,10 @@ local function load_ui_state()
         -- （原来写成"配置写了 panel=yes 就以配置为准"，结果 F2 关掉面板后下次启动又会被强开 ✗）
         if d.panel ~= nil then UI.panel = d.panel == true end
         if d.panel_min ~= nil then UI.panel_min = d.panel_min == true end   -- 第 9 条 r47
+        -- 第 9 条 r48：面板自由位置（窗口像素）。窗口变小/换分辨率时由 render_panel 的 panel_clamp 拉回可见区
+        if type(d.panel_pos) == 'table' and tonumber(d.panel_pos[1]) and tonumber(d.panel_pos[2]) then
+            UI.panel_pos = { tonumber(d.panel_pos[1]), tonumber(d.panel_pos[2]) }
+        end
         -- 第 8 条：样式 + 控制栏是否显示。旧文件没有这两个键 ⇒ 样式仍是按钮面板、
         -- 控制栏不显示，行为与升级前完全一致（用户实测过的路径不变）
         if d.style == 'prbar' or d.style == 'panel' then UI.style = d.style end
@@ -4523,7 +4574,7 @@ save_ui_state = function()
     if not p then return end
     -- 三项开关全部落盘：按钮面板 / 帮助浮窗 / 标记列表（外加「首次提示已显示」）
     write_file_atomic(p, json_encode({
-        panel = UI.panel, panel_min = UI.panel_min,
+        panel = UI.panel, panel_min = UI.panel_min, panel_pos = UI.panel_pos,
         help = UI.help, show_list = S.show_list, hint_shown = UI.hint_shown, mode = UI.mode,
         style = UI.style, bar = UI.bar,
         tl_file = TL.cur_file, tl_t0 = TL.t0, tl_t1 = TL.t1,   -- 第 9 条 r46：时间轴可见范围
@@ -4866,6 +4917,23 @@ mp.register_script_message('tl-set', function(a, b)
     if not (t0 and t1 and t1 >= t0) then return end
     if TL.set_range then TL.set_range(t0, t1, '探针', false) end
 end)
+-- 第 9 条 r48：面板位置取证 / 摆位钩子（离线断言用，与拖动共用 UI.panel_clamp 与 UI.panel_geom）
+mp.register_script_message('panel-pos', function()
+    local g = UI.panel_geom or {}
+    log('面板几何 %s', json_encode({ x = g.x, y = g.y, w = g.w, h = g.h, min = g.min,
+        osd_w = g.osd_w, osd_h = g.osd_h, panel = UI.panel, panel_min = UI.panel_min,
+        pos = UI.panel_pos, anchor = o.panel_anchor }))
+end)
+mp.register_script_message('panel-set', function(a, b)
+    local x, y = tonumber(a), tonumber(b)
+    if not (x and y) then return end
+    UI.panel_pos = { x, y }
+    if not UI.panel then ui_set_shown('panel', true) end
+    render_panel()
+    local g = UI.panel_geom or {}
+    log('面板位置设为 %s,%s → 实际 %s,%s（窗口 %sx%s）', tostring(x), tostring(y),
+        tostring(g.x), tostring(g.y), tostring(g.osd_w), tostring(g.osd_h))
+end)
 mp.register_script_message('state', function()
     print(json_encode({
         sidecar_enabled = o.sidecar,
@@ -4875,6 +4943,7 @@ mp.register_script_message('state', function()
         fps = get_fps(),
         time_format = o.time_format,
         panel = UI.panel,
+        panel_pos = UI.panel_pos, panel_geom = UI.panel_geom,
         osd_style = UI.style,
         osd_bar = UI.bar,
         osc = mp.get_property('osc'),
