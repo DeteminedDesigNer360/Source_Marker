@@ -153,7 +153,7 @@ function Resolve-Key([string]$token) {
         # 注意：这里必须写成两个捕获组，与 Ctrl/Alt 两条同构 —— 只写一个组时 $Matches[2] 是 $null，
         # 会把 $k 赋成空值，下一行 $k.ToUpper() 直接抛异常（本会话 Shift+n / Shift+m 两次踩到）。
         if ($k -match '^(?i)(Shift)\+(.+)$')     { [void]$mods.Add([byte]0x10); $k = $Matches[2]; continue }
-        if ($k -match '^(?i)Alt\+(.+)$')            { [void]$mods.Add([byte]0x12); $k = $Matches[2]; continue }
+        if ($k -match '^(?i)(Alt)\+(.+)$')         { [void]$mods.Add([byte]0x12); $k = $Matches[2]; continue }
         break
     }
     # 方向键 / DEL / HOME / END / INS / PGUP / PGDN 是"扩展键"，注入时必须带

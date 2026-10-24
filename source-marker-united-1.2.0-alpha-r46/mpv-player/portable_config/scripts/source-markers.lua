@@ -1691,7 +1691,9 @@ load_key_overrides()   -- 第 5 条：先读键位覆盖表，后面注册绑定
 local UI = { help = false, panel = o.panel == true, hover = nil, hint_shown = false, mode = false,
              style = 'panel', bar = false,
              panel_min = false,    -- 第 9 条 r47：按钮面板"最小化"（缩成左下角一个小方块）
-             panel_pos = nil }     -- 第 9 条 r48：按钮面板的自由位置 {x,y}（窗口像素）；nil = 仍按 panel_anchor
+             panel_pos = nil,      -- 第 9 条 r48：按钮面板的自由位置 {x,y}（窗口像素）；nil = 仍按 panel_anchor
+             panel_drag = false,   -- 第 9 条 r48：面板拖动状态机（点 ⠿ 抓起 → 再点放下 / ESC 取消）
+             panel_drag_from = nil }
 -- 第 9 条 r48：上次渲染出的面板几何 {x,y,w,h} 存在 UI.panel_geom 里 —— 主 chunk 的局部变量已到
 -- Lua 5.1 的 200 个上限（:4472 报 "main function has more than 200 local variables"），新东西不能再开 local
 local PANEL_BUTTONS = {}          -- 渲染后填充：{name,label,x,y,w,h,section}
@@ -1958,6 +1960,7 @@ local function render_panel()
         set_overlay(overlay_panel, lines, w, h)
         local b = { name = 'panel-min', label = '＋', x = bx, y = by, w = bw, h = bw }
         UI.panel_geom = { x = bx, y = by, w = bw, h = bw, min = true }
+        panel_sections_off()          -- 第 9 条 r48：别让最小化前的按钮命中区残留
         PANEL_BUTTONS = { b }
         b.section = 'sm_panel_panel_min'
         mp.commandv('define-section', b.section, 'mbtn_left script-binding ' .. BIND_PREFIX .. b.name, 'force')
@@ -1971,6 +1974,8 @@ local function render_panel()
     local row_main, row_extra, color_row, row_title = {}, {}, {}, {}
     for _, a in ipairs(ACTIONS) do
         if a.color then color_row[#color_row + 1] = a
+        elseif a.name == 'panel-grab' then
+            -- 抓手单独画在标题行最左，不进 row_title（见 draw 里的标题行部分）
         elseif a.name == 'help' or a.name == 'toggle-panel' or a.name == 'panel-min' then
             row_title[#row_title + 1] = a
         elseif #row_main < 5 then row_main[#row_main + 1] = a
@@ -1979,8 +1984,7 @@ local function render_panel()
 
     local title = string.format('Source Markers ｜ 颜色 %d %s ｜ %d 个标记',
         S.color, color_name(S.color), #S.markers)
-    -- 第 9 条 r48：标题宽度按实测像素算（见 UI.label_px 的系数表）
-    local title_w = UI.label_px(title, size) + 2 * pad
+    -- 标题宽度不在这里算：拖动时标题文案会变（"移动中…"），宽度由 draw() 内部按当前文案算
 
     -- 竖向位置：默认自动抬到 mpv 进度条（OSC）上方；行高按 4 行算，正式值在量完内容后修正
     local total_h = bh * 4 + gap * 5 + 8
@@ -1997,20 +2001,37 @@ local function render_panel()
                 local tw = UI.label_px(a.label, size)
                 local bw = tw + 2 * pad + 2
                 local hovered = (UI.hover == a.name)
+                -- 第 9 条 r48：拖动中其它按钮的命中区已整体关掉，视觉上也要跟上（灰字 + 淡底），
+                -- 否则用户会以为还能点，点下去却没反应
+                local dis = UI.panel_drag and a.name ~= 'panel-grab'
                 buttons[#buttons + 1] = { name = a.name, label = a.label, x = x, y = y, w = bw, h = bh }
-                local bg = a.color and ass_color(a.color) or (hovered and '&H3C6E9E&' or '&H333333&')
-                lines[#lines + 1] = rect_line(x, y, bw, bh, bg, hovered and '10' or '35')
+                local bg = a.color and ass_color(a.color) or (hovered and not dis and '&H3C6E9E&' or '&H333333&')
+                lines[#lines + 1] = rect_line(x, y, bw, bh, bg, dis and '12' or (hovered and '10' or '35'))
                 local fg, oc = '&HFFFFFF&', '&H000000&'
                 if a.color then fg, oc = swatch_colors(a.color) end
-                lines[#lines + 1] = text_line(x + math.floor((bw - tw) / 2), y + pad, size, fg, a.label, hovered, oc)
+                if dis then fg, oc = '&H8A8A8A&', '&H000000&' end
+                lines[#lines + 1] = text_line(x + math.floor((bw - tw) / 2), y + pad, size, fg, a.label, hovered and not dis, oc)
                 x = x + bw + gap
             end
             return y + bh + gap
         end
 
         local y = top + 4
-        lines[#lines + 1] = text_line(left + pad, y + pad, size, '&H4DE0FF&', title, true)
-        place(row_title, y, left + pad + title_w)          -- 标题行右侧：帮助 / 关闭
+        -- 第 9 条 r48：标题行最左是拖动抓手 ⠿。拖动中它变高亮、标题改成"怎么放下"的提示，
+        -- 位置随抓手右移（标题宽度按当前文案重算，所以不用外面传 title_w 进来）。
+        local drag = UI.panel_drag
+        local grab_tw = UI.label_px('⠿', size)
+        local grab_w = grab_tw + 2 * pad + 2
+        buttons[#buttons + 1] = { name = 'panel-grab', label = '⠿', x = left + pad, y = y, w = grab_w, h = bh }
+        lines[#lines + 1] = rect_line(left + pad, y, grab_w, bh,
+            drag and '&H3C6E9E&' or '&H333333&', drag and '10' or '35')
+        lines[#lines + 1] = text_line(left + pad + math.floor((grab_w - grab_tw) / 2), y + pad, size,
+            drag and '&HFFFFFF&' or '&HCCCCCC&', '⠿')
+        local title_txt = drag and '移动中 · 点 ⠿ 放下 · ESC 取消' or title
+        local title_w = UI.label_px(title_txt, size) + 2 * pad
+        lines[#lines + 1] = text_line(left + pad + grab_w + gap, y + pad, size,
+            drag and '&HFFD050&' or '&H4DE0FF&', title_txt, true)
+        place(row_title, y, left + pad + grab_w + gap + title_w)   -- 标题行右侧：帮助 / 关闭
         y = y + bh + gap
 
         -- 颜色行：8 个色块（数字即 Pr 的颜色索引）；选中项用白色外圈 + 加粗标出
@@ -2058,7 +2079,6 @@ local function render_panel()
         pad = math.max(4, math.floor(size * 0.4))
         bh = size + 2 * pad
         gap = math.max(3, math.floor(size * 0.35))
-        title_w = UI.label_px(title, size) + 2 * pad
         total_h = bh * 4 + gap * 5 + 8
         panel_w, content_h = measure()
     end
@@ -2080,22 +2100,73 @@ local function render_panel()
         left = (anchor == 'bottom-right') and math.max(SIDE_PADDING, w - x0 - panel_w) or x0
     end
     left, top = UI.panel_clamp(left, top, w, h, panel_w, total_h)
-    UI.panel_geom = { x = left, y = top, w = panel_w, h = total_h, min = false, osd_w = w, osd_h = h }
+    -- grab 记抓手 ⠿ 的客户区命中框，供取证钩子与日志回显（点击坐标靠它，不靠猜）
+    UI.panel_geom = { x = left, y = top, w = panel_w, h = total_h, min = false, osd_w = w, osd_h = h,
+        grab = { x = left + pad, y = top + 4, w = UI.label_px('⠿', size) + 2 * pad + 2, h = bh } }
 
     local lines, buttons = draw(left, top)
     table.insert(lines, 1, rect_line(left - 12, top - 10, panel_w + 24, total_h + 16, '&H141414&', '25'))
 
     set_overlay(overlay_panel, lines, w, h)
 
+    -- 首帧把面板几何记一次：上机排查与自动化点击都靠它，不靠猜坐标
+    if not UI.panel_geom_logged then
+        UI.panel_geom_logged = true
+        local gg = UI.panel_geom and UI.panel_geom.grab
+        log('面板几何 面板=%s,%s %sx%s 抓手=%s,%s %sx%s', left, top, panel_w, total_h,
+            gg and gg.x or '?', gg and gg.y or '?', gg and gg.w or '?', gg and gg.h or '?')
+    end
+
     -- 注册鼠标区域：每个按钮一个 input section（set_mouse_area 是按 section 生效的）
+    -- 第 9 条 r48：先关掉上一轮的所有命中区（拖动时还要靠它把其它按钮整体禁掉）
+    panel_sections_off()
     PANEL_BUTTONS = buttons
     for _, b in ipairs(buttons) do
         b.section = 'sm_panel_' .. b.name:gsub('[^%w]', '_')
         mp.commandv('define-section', b.section,
             'mbtn_left script-binding ' .. BIND_PREFIX .. b.name, 'force')
-        mp.commandv('enable-section', b.section)
-        mp.set_mouse_area(b.x, b.y, b.x + b.w, b.y + b.h, b.section)
+        -- 拖动中只留抓手可点：否则拖到一半点到「打标记」会直接打上标记
+        if (not UI.panel_drag) or b.name == 'panel-grab' then
+            mp.commandv('enable-section', b.section)
+            mp.set_mouse_area(b.x, b.y, b.x + b.w, b.y + b.h, b.section)
+        end
     end
+end
+
+-- 第 9 条 r48：面板拖动状态机。mpv 只给 mouse-down、没有 mouse-up，所以拖动是"点-移动-点"：
+-- 点标题行左侧的 ⠿ 抓起（此时其它按钮的 input section 全关，防误触打标记），
+-- 再点 ⠿ 放下；ESC 取消并回到抓起前的位置。真正的鼠标跟随在 R48-3。
+-- 位置：必须写在 render_panel 之后 —— 它要调用 render_panel，而 Lua 的局部变量
+-- 从声明处才可见，写在前面拿到的是全局 nil（实测报 attempt to call global 'render_panel'）。
+UI.panel_grab_toggle = function()
+    if UI.panel_drag then
+        UI.panel_drag = false
+        UI.panel_drag_from = nil
+        notify('面板拖动：已放下')
+    else
+        local g = UI.panel_geom
+        UI.panel_drag = true
+        UI.panel_drag_from = g and { x = g.x, y = g.y } or nil
+        notify('面板拖动：点 ⠿ 放下 · ESC 取消')
+    end
+    local g = UI.panel_geom
+    log('面板拖动 %s（面板 %s,%s 尺寸 %sx%s；抓手 框=%s,%s %sx%s）',
+        UI.panel_drag and '抓起' or '放下', g and g.x or '?', g and g.y or '?',
+        g and g.w or '?', g and g.h or '?',
+        g and g.grab and g.grab.x or '?', g and g.grab and g.grab.y or '?',
+        g and g.grab and g.grab.w or '?', g and g.grab and g.grab.h or '?')
+    render_panel()
+end
+UI.panel_grab_cancel = function()
+    if not UI.panel_drag then return false end
+    UI.panel_drag = false
+    if UI.panel_drag_from then UI.panel_pos = { UI.panel_drag_from[1] or UI.panel_drag_from.x,
+        UI.panel_drag_from[2] or UI.panel_drag_from.y } end
+    UI.panel_drag_from = nil
+    notify('已取消拖动，面板回到原位')
+    log('面板拖动 取消（回原位）')
+    render_panel()
+    return true
 end
 
 ----------------------------------------------------------------------
@@ -3584,6 +3655,8 @@ mp.observe_property('mouse-pos', 'native', function(_, p)
     if TL.grab and p and p.x and TL.geo then tl_grab_move(TL.geo, p.x) end
 end)
 mp.add_key_binding('ESC', 'tl-grab-cancel', function()
+    -- 第 9 条 r48：面板拖动中也吃 ESC —— 取消拖动并把位置还原，不吃掉 mpv 的退出全屏
+    if UI.panel_drag and UI.panel_grab_cancel() then return end
     if TL.grab then
         TL.abort('ESC')
     else
@@ -3859,6 +3932,8 @@ local function toggle_panel_min(state)
         return
     end
     if not UI.panel then ui_set_shown('panel', true) end     -- 面板没开时点 − 先把它打开
+    UI.panel_drag = false                                    -- 第 9 条 r48：最小化/还原一律结束拖动
+    UI.panel_drag_from = nil
     UI.panel_min = (state == nil) and (not UI.panel_min) or (state == true)
     render_panel()
     if save_ui_state then save_ui_state() end
@@ -3884,6 +3959,7 @@ local function toggle_panel(state)
     local on = (state == nil) and (not ui_style_shown(style)) or (state == true)
     ui_set_shown(style, on)
     if not on then UI.panel_min = false end    -- 关闭时"最小化"没有意义，下次打开按完整面板算
+    if not on then UI.panel_drag = false; UI.panel_drag_from = nil end   -- 第 9 条 r48：关面板也结束拖动
     render_panel()
     render_prbar()
     render_timeline()
@@ -4506,6 +4582,12 @@ register({ key = 'Alt+F2', name = 'panel-min', label = '−',
     help = '把按钮面板缩成左下角一个小方块（点方块还原；最小化状态下按 F2 也还原）' },
     function() toggle_panel_min() end)
 
+-- 第 9 条 r48：面板抓手（标题行最左的 ⠿）。键位和点抓手等价 —— 面板最小化/隐藏时
+-- 也能用键盘切换；拖动中按 ESC 取消并回原位。
+register({ key = 'Alt+F3', name = 'panel-grab', label = '⠿',
+    help = '拖动面板：点一下抓起，再点一下放下（键盘同效）；拖动中按 ESC 取消并回原位' },
+    function() UI.panel_grab_toggle() end)
+
 register({ key = 'F3', name = 'switch-osd', label = '切换 OSD 样式',
     help = '在「按钮面板」和「Pr 风格控制栏」之间切换（切完立即显示）' }, function() switch_osd_style() end)
 
@@ -4720,6 +4802,7 @@ mp.register_script_message('ui-state', function(path)
     local bottom_opt = tonumber(o.panel_bottom) or 0
     local payload = json_encode({
         help = UI.help, panel = UI.panel, panel_min = UI.panel_min, hover = UI.hover,
+    panel_drag = UI.panel_drag,
         help_lines = lines_of(overlay_help), panel_lines = lines_of(overlay_panel),
         count = #S.markers, color = S.color, list = S.show_list,
         sidecar = S.sidecar, buttons = btns, keys = keys,
@@ -4960,6 +5043,24 @@ mp.register_script_message('panel-set', function(a, b)
     local g = UI.panel_geom or {}
     log('面板位置设为 %s,%s → 实际 %s,%s（窗口 %sx%s）', tostring(x), tostring(y),
         tostring(g.x), tostring(g.y), tostring(g.osd_w), tostring(g.osd_h))
+end)
+-- 第 9 条 r48：面板拖动状态机取证钩子（离线断言用；不开面板只切状态，便于用 state 读回）
+mp.register_script_message('panel-grab', function(a)
+    local want = tostring(a or 'toggle')
+    if want == 'on' then
+        if not UI.panel_drag then UI.panel_grab_toggle() end
+    elseif want == 'off' then
+        if UI.panel_drag then UI.panel_grab_toggle() end
+    elseif want == 'cancel' then
+        UI.panel_grab_cancel()
+    else
+        UI.panel_grab_toggle()
+    end
+    local g = UI.panel_geom or {}
+    log('面板拖动 %s → drag=%s pos=%s,%s from=%s', want, tostring(UI.panel_drag),
+        tostring(g.x), tostring(g.y),
+        UI.panel_drag_from and string.format('%s,%s', tostring(UI.panel_drag_from[1]),
+            tostring(UI.panel_drag_from[2])) or '（无）')
 end)
 mp.register_script_message('state', function()
     print(json_encode({
