@@ -2010,7 +2010,7 @@ UI.panel_draw = function(cfg, left, top)
         drag and '&HFFD050&' or '&H333333&', drag and '10' or '35')
     lines[#lines + 1] = UI.text_line(left + pad + math.floor((grab_w - grab_tw) / 2), y + pad, size,
         drag and '&HFFFFFF&' or '&HCCCCCC&', '⠿', drag, drag and '&H101418&' or nil)
-    local title_txt = drag and '移动中 · 点 ⠿ 放下 · ESC 取消' or cfg.title
+    local title_txt = drag and '移动中 · 点 ⠿ 或停 0.6s 放下 · ESC 取消' or cfg.title
     local title_w = UI.label_px(title_txt, size) + 2 * pad
     lines[#lines + 1] = UI.text_line(left + pad + grab_w + gap, y + pad, size,
         drag and '&HFFD050&' or '&H4DE0FF&', title_txt, true)
@@ -2211,7 +2211,7 @@ UI.panel_drag_edge_check = function()
     local last = UI.drag_last_at
     if not last or not UI.drag_moved then return end
     if mp.get_time() - last >= 0.6 then
-        UI.panel_drag_drop('鼠标已移出窗口')
+        UI.panel_drag_drop('鼠标已停止 0.6 s 或移出窗口')
     end
 end
 UI.panel_drag_timer_arm = function()
@@ -2236,7 +2236,7 @@ UI.panel_drag_drop = function(reason)
 end
 -- 第 9 条 r48：面板拖动状态机。mpv 只给 mouse-down、没有 mouse-up，所以拖动是"点-移动-点"：
 -- 点标题行左侧的 ⠿ 抓起（此时其它按钮的 input section 全关，防误触打标记），
--- 再点 ⠿ 放下；ESC 取消并回到抓起前的位置。真正的鼠标跟随在 R48-3。
+-- 再点 ⠿ 放下（或原地停 0.6 s / 鼠标移出窗口自动放下）；ESC 取消并回到抓起前的位置。
 -- 位置：必须写在 render_panel 之后 —— 它要调用 render_panel，而 Lua 的局部变量
 -- 从声明处才可见，写在前面拿到的是全局 nil（实测报 attempt to call global 'render_panel'）。
 UI.panel_grab_toggle = function()
@@ -2273,7 +2273,7 @@ UI.panel_grab_toggle = function()
         end
         UI.drag_last_at = mp.get_time()
         UI.drag_moved = nil
-        notify('面板拖动：点 ⠿ 放下 · ESC 取消')
+        notify('面板拖动：点 ⠿ 或停 0.6s 放下 · ESC 取消')
         UI.panel_drag_timer_arm()          -- 出窗轮询：0.6 s 收不到鼠标事件就自动放下
     end
     render_panel()
