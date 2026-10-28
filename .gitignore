@@ -27,3 +27,6 @@ _tmp*
 
 # 运行时状态：mpv 每次运行都会重写 script-opts 下的配置（不是源码），不入库
 **/script-opts/source-markers.conf
+
+# 测量用测试素材：每个几十 MB，用户 m09580 定「测试用 mp4 不入库」，只留在工作区 reference\
+reference/*.mp4

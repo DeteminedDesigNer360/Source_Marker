@@ -89,8 +89,8 @@ local o = {
     tl_key_step = 2.0,         -- 第 9 条：Alt+= / Alt+- 的步长（Pr 的 = 实测就是 ×2）
     tl_labels = true,          -- 第 9 条：刻度上是否显示时间戳（Pr 没有；默认开）
     tl_ov_map = 'bar',         -- 第 9 条：概览条映射 linear | sqrt | pow | bar（bar = Pr 实测形态，默认）
-    tl_ov_pow = 'auto',        -- 第 9 条：仅 tl_ov_map=sqrt/pow 时生效（bar 已线性化，见 TL.bar_geom）
-    tl_ov_k = 1.19,            -- 第 9 条：已弃用（P1 线性化后 bar 模式不再读它；留字段只为 ui.json 兼容）
+    tl_ov_pow = 'auto',        -- 第 9 条：仅 tl_ov_map=sqrt/pow 时生效（bar 模式的指数由 TL.bar_pow 现算，不读这里）
+    tl_ov_k = 1.19,            -- 第 9 条：已弃用（bar 模式改成"中心线性 + 宽度幂律"后不再读它；留字段只为 ui.json 兼容）
     tl_ov_min_px = 0,          -- 第 9 条：概览条最小跨度 —— **两环中心距**（px）。0 = 自动 round(22 * display-hidpi-scale)。
                                --   22 是 Pr 实测的绝对逻辑像素常量：1280×800@100% 与 2560×1600@175%
                                --   折回逻辑后都是 22.0，即它不随窗口大小变、只按系统 dpi 放大。
@@ -2627,6 +2627,7 @@ local function render_timeline()
     local x0 = m.x + pad
     local x1 = m.x + m.width - pad
     local rw = x1 - x0
+    TL.rw = rw                                   -- 概览条幂律的指数要靠它（TL.bar_pow）
     local span = t1 - t0
     local lines = { round_rect_line(m.x, m.y, m.width, m.height, math.floor(8 * s + 0.5), '&H1E1E1E&', '18') }
 
@@ -2905,14 +2906,15 @@ local function render_timeline()
         })
     end
     -- 中间量打进日志（位置类问题只能靠它精确定位，别靠肉眼数像素）
-    msg.verbose(string.format('时间轴：范围 %.3f~%.3f ｜ 画布 x %d..%d ｜ 行数 %d ｜ 大刻度 %.4fs×%d段 ｜ 标签%s 首标=%s ｜ 入=%s 出=%s ｜ 播放头=%s ｜ 几何 tc=%d,%d 标签行=%d 基线=%d 概览=%d 概览x=%d,%d 码宽=%d/%d 概览k=%.4f',
+    msg.verbose(string.format('时间轴：范围 %.3f~%.3f ｜ 画布 x %d..%d ｜ 行数 %d ｜ 大刻度 %.4fs×%d段 ｜ 标签%s 首标=%s ｜ 入=%s 出=%s ｜ 播放头=%s ｜ 几何 tc=%d,%d 标签行=%d 基线=%d 概览=%d 概览x=%d,%d 码宽=%d/%d 概览k=%.4f 概览p=%.4f 环心距min=%d',
         t0, t1, x0, x1, #lines,
         step, parts or 0, o.tl_labels and 'on' or 'off', first_lab ~= '' and first_lab or '（无）',
         xi_x and string.format('%.0f', xi_x) or '无', xo_x and string.format('%.0f', xo_x) or '无',
         t and string.format('%.3f 吸帧=%s 帧宽=%.1fpx 头x=%.0f', t, fi and tostring(fi) or '关',
             frame_px, cx_pl or -1) or '无',
         row_tc, tc_sz, row_lab, rl_y, row_ov, wx0, wx1, wl, wr,
-        (o.tl_ov_map == 'bar' and TL.bar_k) and TL.bar_k(math.max(0, math.min(1, span / math.max(1e-6, dur)))) or 1))
+        (o.tl_ov_map == 'bar' and TL.bar_k) and TL.bar_k(math.max(0, math.min(1, span / math.max(1e-6, dur)))) or 1,
+        (o.tl_ov_map == 'bar') and TL.bar_pow(dur) or 1, TL.ov_min_px()))
 end
 
 ----------------------------------------------------------------------
@@ -3242,24 +3244,49 @@ local function tl_ov_time(g, mx, kind, l0, r0)
     return f * g.dur
 end
 
--- 概览条 'bar' 映射（Pr 入出点标记实测，2026-10-25 定论）：
+-- 概览条 'bar' 映射（Pr 实测定论，2026-10-28 结论见 docs/测量-Pr概览条缩放序列-2026-10-28.md）：
 --   u = (t1-t0)/dur, c = (t0+t1)/(2*dur)
---   **left = c - u/2, right = c + u/2 —— 纯线性，宽度和位置都直接由时间比例给出**
---   再夹到 [0,1]（贴边时 Pr 也是夹住不是压缩），宽度不足时以区间中心为锚撑到最小环心距。
+--   **中心线性**  xc = c                           ← 位置严格按时间比例（Pr §4.2 实测）
+--   **宽度幂律**  w  = u ^ p                       ← 长度按幂律，p 见下面 TL.bar_pow
+--   left = xc - w/2, right = xc + w/2，再夹到 [0,1]；点不到时以区间中心为锚撑到最小环心距。
 --
--- 历史（P1，别再走回头路）：
---   r44~r47 这里是 w = u^pow、xc = 0.5+(c-0.5)*k(u)，pow 由「最小跨度正好画成 27 px」反推。
---   那套参数是在**底部可视范围滑块**上拟合的（w = u^0.478、k = 0.52~0.96），而概览条上 Pr 画的是
---   **入出点标记**，两者是不同控件：滑块走幂律，入出点标记完全线性（5 min 片 x = 14 + 0.1384·t、
---   15 min 片 x = 11.7 + 0.04626·t，残差 ≤1 px，31 帧 = 4.3 px 也分成两条）。
---   照滑块拟合去画入出点标记 ⇒ 长素材 u=0.87 时 w 已经 0.936，视觉上几乎满条但时间不是 0~全长（P1）。
---   所以两个函数现在都是恒等：保留名字只为 TL.bar_k 在 tl_ov_time 里兼作存在性检查（:3208）。
+-- 为什么位置和长度用两套规矩（用户 m10437 定下的四条要求）：
+--   · 拖到最长 = 全片、拖到最短 = 40 帧、平移时可视区间线性跟着平移、撞端点就是片头/片尾。
+--   · 位置线性 ⇒ 平移跟手、贴边语义直白；长度幂律 ⇒ 极小区间也点得中，不会「区间还在缩但条不动」。
+--   · 只做线性（r49 第一版）会在高缩放等级下把条压成 0，中间横轴没法拖（用户 m10404 实测）。
+--
+-- p 的取法不是拟合常数，而是**让两个下限对齐**：
+--   区间缩到最小跨度时 w 恰好等于最小环心距 ⇒ p = ln(W_min/rw) / ln(minspan/dur)。
+--   于是 u_min ↦ W_min 天然成立，**不需要任何视觉硬撑**，「条缩不动」与「抓手消失」同时消失。
+--   30 s 素材 p=1.29（条比线性窄）、30 min p=0.559（条比线性宽）—— 两端符号相反由几何决定，
+--   与 Pr 上机实测的按 = 行为一致（30 s 按一次 = 条缩到 40.8%）。
+--
+-- 历史（别再走回头路）：
+--   r44~r47：w = u^pow 且 xc = 0.5+(c-0.5)*k(u)，pow 由「最小跨度正好画成 27 px」反推。那套参数是在
+--     **底部可视范围滑块**上拟合的（w = u^0.478、k = 0.52~0.96），抄到概览条上 ⇒ 长素材 u=0.87 时
+--     w 已经 0.936，视觉几乎满条但时间不是 0~全长（P1 贴边不同步）。k 那一项纯属多抄。
+--   r49：认定概览条对标 Pr 的**入出点标记**（ruler 蓝线，完全线性），于是把宽度也改成 u。
+--     用户 m10404 纠正：mpv 的入出点标记是时间轴上那对中括号（AB 循环），概览条是**可视范围滑块**，
+--     功能同构物是滑块 ⇒ 长度本来就该非线性。
+--
+-- TL.bar_k：只为兼容旧调用点保留（tl_ov_time / :2915 / :3750 拿它当"bar 模式是否存在"的探针），
+--   中心既然线性，放大系数恒为 1。
 TL.bar_k = function(u)
     return 1
 end
 
+-- 宽度幂律的指数 p。rw 取渲染时记下的轨道宽（TL.rw，见 render_timeline / tl_grab_move）。
+-- 取不到 rw 时退化 p=1（线性），不会崩。
 TL.bar_pow = function(dur)
-    return 1
+    local rw = tonumber(TL.rw) or 0
+    local minspan = tl_min_span()
+    if rw <= 1 or not dur or dur <= minspan then return 1 end
+    local umin = minspan / dur
+    local wmin = TL.ov_min_px() / rw
+    if umin <= 0 or umin >= 1 or wmin <= 0 or wmin >= 1 then return 1 end
+    local p = math.log(wmin) / math.log(umin)
+    if not p or p <= 0 or p ~= p then return 1 end
+    return p
 end
 
 -- 概览条最小环心距（px）：显式配置优先，0 = 自动按系统 dpi 放大 Pr 的 22 逻辑 px。
@@ -3279,7 +3306,7 @@ TL.bar_geom = function(t0, t1, dur)
     if not dur or dur <= 0 then return 0, 1 end
     local u = math.max(0, math.min(1, (t1 - t0) / dur))
     local c = math.max(0, math.min(1, (t0 + t1) / (2 * dur)))
-    local w = u                       -- P1 线性化：宽度 = 区间占比本身（原来 w = u^pow）
+    local w = u ^ TL.bar_pow(dur)     -- 宽度幂律（r50）：u_min ↦ W_min，见 TL.bar_pow 的注释
     -- 贴边必须**钉住**：区间碰到片头/片尾时，那一端就固定在 0/1，宽度照旧由 u 决定。
     -- 否则中心公式（xc 带 k>1 的放大）会让"本该不动的另一端"跟着漂 —— 用户实测：
     -- 播放头 0 时拖右圆从最小到最大，左端在 16s 起右移、23s 到顶、30s 回到原位（复现：138→147→138）。
@@ -3383,7 +3410,9 @@ TL.bar_solve_px = function(dur, anchor, target, side, minw, edge)
     end
     local w = b - a
     if w <= 1e-6 then return nil end
-    local u = w
+    -- 宽度幂律的反解：w = u^p ⇒ u = w^(1/p)（p=1 时就是线性，跳过开方省一点）
+    local pw = TL.bar_pow(dur)
+    local u = (pw ~= 1) and (w ^ (1 / pw)) or w
     if u > 1 then return nil end
     local span = u * dur
     -- 贴片头/片尾：绘制那边是**钉死**那一端（l=0,w 或 1-w,1），反解必须走同一条式子。
@@ -3488,6 +3517,7 @@ end
 local function tl_grab_move(g, mx)
     local gr = TL.grab
     if not gr then return end
+    if g.rw and g.rw > 1 then TL.rw = g.rw end   -- 拖动时的轨道宽可能与上一帧渲染不同（拖动中重绘有延迟）
     local minspan = tl_min_span()
     local n0, n1 = gr.t0, gr.t1
     local pn                                   -- p = 播放头在当前区间里的位置（只有 bar 模式算）
@@ -3685,10 +3715,10 @@ local function tl_grab_move(g, mx)
         end
         local pa, pb
         if pinpx and (kind_eff == 'left' or kind_eff == 'right') then
-            -- P4：反解的宽度下限必须与绘制侧的撑开**同源**（都用最小环心距归一化）。
-            -- 原来只用 minspan/dur，绘制侧却另外撑到 27 px ⇒ 最窄档环心算在真实位置、
-            -- 画出来的环却被撑开，两者差半个撑开量，拖起来就是"抓到的和看到的不是一个东西"。
-            local wmin = math.max(minspan / g.dur, TL.ov_min_px() / math.max(1, g.rw))
+            -- P4：反解的宽度下限必须与绘制侧**同源**（都走 w = u^p 与最小环心距）。
+            -- 幂律下 u_min 恰好映射到 W_min，两个下限理论相等，取 max 只为数值兜底。
+            local wmin = math.max(TL.ov_min_px() / math.max(1, g.rw),
+                (minspan / math.max(1e-6, g.dur)) ^ TL.bar_pow(g.dur))
             local anchor = kind_eff == 'right' and gr.l0 or gr.r0
             -- 抓取时区间贴片头/片尾 ⇒ 绘制那边是钉死那一端，反解也必须钉死，
             -- 否则中心公式会把"贴头"解成别处的等宽区间（1 h 素材上偏到 48 s，用户报的漂移）。

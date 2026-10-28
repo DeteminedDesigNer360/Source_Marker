@@ -4,10 +4,11 @@
 --   mpv.com --config-dir=portable_config --log-file=_tmp\tl.log --msg-level=all=v --           --script=tools\probes\tl-linear.lua 你的素材.mp4
 --
 -- 它会按媒体时长的比例依次设 7 个区间，每档 0.6 s，打完自己退出。
--- 判定：日志里每行「时间轴：范围 a~b … 画布 x X0..X1 … 概览x=L,R 概览k=K」
---   · 期望 L = X0 + (X1-X0)*a/dur，R = X0 + (X1-X0)*b/dur
+-- 判定：日志里每行「时间轴：范围 a~b … 画布 x X0..X1 … 概览x=L,R 概览k=K 概览p=P 环心距min=M」
+--   · 中心线性：c = (a+b)/2/dur，环心 = X0 + (X1-X0)*c
+--   · 宽度幂律：w = ((b-a)/dur)^P，P 由「最小跨度正好画成 M px」反推
 --   · 常规区间应逐像素命中；最窄档会被"最小环心距"撑开（L/R 离开期望值是正常的）
---   · 概览k 必须是 1.0000（幂律已删；不是 1 说明装的是旧版）
+--   · 概览k 必须是 1.0000（中心无横向放大）；概览p 恒为 1.000 说明 rw 没取到
 --   解析脚本：tools\probes\tl-parse.py <log>
 local dur = mp.get_property_number('duration')
 local function run()
