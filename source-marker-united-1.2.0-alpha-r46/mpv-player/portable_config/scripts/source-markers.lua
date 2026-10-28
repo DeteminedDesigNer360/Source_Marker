@@ -89,13 +89,13 @@ local o = {
     tl_key_step = 2.0,         -- 第 9 条：Alt+= / Alt+- 的步长（Pr 的 = 实测就是 ×2）
     tl_labels = true,          -- 第 9 条：刻度上是否显示时间戳（Pr 没有；默认开）
     tl_ov_map = 'bar',         -- 第 9 条：概览条映射 linear | sqrt | pow | bar（bar = Pr 实测形态，默认）
-    tl_ov_pow = 'auto',        -- 第 9 条：亮段宽 = u^pow。'auto' = 按片长自适应（Pr 实测：30 s→1.33、60 min→0.478，
-                               --   log10 插值）；填数字则固定用该值（老口径 1.30 只能对照，1 h 素材会撑出"漂移"）
-    tl_ov_k = 1.19,            -- 第 9 条：bar 模式中心斜率（u=1/2 处）—— NS4 两轮拟合，深层按 u^0.68 衰减
-    tl_ov_min_px = 27,         -- 第 9 条 r47：最小跨度时概览条亮段的**目标**宽度（px，含两环）—— 按 Pr 口径定：
-                               --   Pr 最小 31 px = 2×10 圆 + 11 px 横条 ⇒ 我方环径 14（半径 cr+1）⇒ 27 px（中间横条 13 px）。
-                               --   宽度指数由它反推（见 TL.bar_pow），所以最小档是真实映射、不用撑开、拖圆不漂。
-                               --   同时兼作兜底下限：映射真的画不到这么宽时才会撑开。0 = 自动（2*圆半径+4）。
+    tl_ov_pow = 'auto',        -- 第 9 条：仅 tl_ov_map=sqrt/pow 时生效（bar 已线性化，见 TL.bar_geom）
+    tl_ov_k = 1.19,            -- 第 9 条：已弃用（P1 线性化后 bar 模式不再读它；留字段只为 ui.json 兼容）
+    tl_ov_min_px = 0,          -- 第 9 条：概览条最小跨度 —— **两环中心距**（px）。0 = 自动 round(22 * display-hidpi-scale)。
+                               --   22 是 Pr 实测的绝对逻辑像素常量：1280×800@100% 与 2560×1600@175%
+                               --   折回逻辑后都是 22.0，即它不随窗口大小变、只按系统 dpi 放大。
+                               --   **口径**：这里只是环心距；绘制时两端各再外扩一个环半径才是亮段总宽，
+                               --   反解（bar_solve_px 的 wmin）归一到同一个数 —— 两处必须同源，否则拖到最窄会漂（P4）。
     tl_ov_pin = 'px',          -- 第 9 条：拖圆缩放的钉住口径 px = 另一端像素不动、该端时间微调（Pr 实测：左端漂 12~16 帧，默认）| time = 另一端时间不动
     tl_hit_px = 0,             -- 第 9 条：概览条两个圆的命中半径（px）。0 = 用**视觉**半径（圆半径 + 描边 2），
                                --   与看到的圆一样大；>0 时以它为准（老口径 13 是"放大 1.1 倍"，会抢走中间横条）
@@ -1726,7 +1726,10 @@ end
 
 local function ui_font()
     local _, h = osd_size()
-    return math.max(14, math.min(26, math.floor(h * 0.026 + 0.5)))
+    -- 上限 26 只对 1080p 以内合适：h 是**物理像素**，1600p 全屏（dpi 1.75）理论值 41，
+    -- 截到 26 等于 14.9 逻辑 px，比 1080p@100% 的 26 还小一圈（P7 实测）。
+    -- 抬到 34 = 19.4 逻辑 px，与 1080p 的观感对齐。
+    return math.max(14, math.min(34, math.floor(h * 0.026 + 0.5)))
 end
 
 local function set_overlay(ov, lines, w, h)
@@ -2436,7 +2439,9 @@ end
 
 local function prbar_metrics()
     local w, h = osd_size()
-    local scale = math.max(0.8, math.min(1.5, h / 1080)) * (tonumber(o.bar_scale) or 1.0)
+    -- 上限 1.5 是为 1080p 定的；1600p@1.75 下 h/1080 = 1.481 还差 1.3% 就顶到，
+    -- 再高的屏（4K/2x）会被硬截住导致控件偏小。抬到 2.0 只留余量，当前分辨率观感不变（P7）。
+    local scale = math.max(0.8, math.min(2.0, h / 1080)) * (tonumber(o.bar_scale) or 1.0)
     local icon = math.max(10, math.floor(22 * scale + 0.5))
     local pad = math.max(4, math.floor(9 * scale + 0.5))
     local gap = math.max(2, math.floor(4 * scale + 0.5))
@@ -2696,11 +2701,10 @@ local function render_timeline()
     -- r47：极小跨度下亮段会缩到 0 px（1 h 素材缩到 40 f 时真实宽度 ≈ 0.0003 px，整段看不见），
     -- 这里只做**视觉下限**：撑到"两环刚好相切"（2*cr+2，与 Pr 实测的 22 px 下限同口径）。
     -- 反解（bar_solve / bar_solve_px）与命中仍用真实 bar_geom 的结果，所以拖动精度不受影响。
-    -- r47 对齐 Pr：下限取"两环相切"（2*cr+2）与 tl_ov_min_px（默认 26）的较大者，
-    -- 这样最小跨度下两环之间仍留出中间横条（26 - 2*cr ≈ 14 px），点得中。
-    local ov_min_px = tonumber(o.tl_ov_min_px) or 0
-    if ov_min_px <= 0 then ov_min_px = 2 * cr + 4 end
-    ov_min_px = math.max(ov_min_px, 2 * cr + 2)
+    -- 撑开的目标就是**环心距**（TL.ov_min_px，照 Pr 的 22 逻辑 px 按 dpi 放大）。
+    -- 别再加 2*cr+2：下面的 wx0/wx1 是"环心位置"不是"亮段外沿"，
+    -- 加了环径会让环心距凭空多一个环宽，反解那边（wmin 只归一化环心距）就跟不上了（P4）。
+    local ov_min_px = TL.ov_min_px()
     if wx1 - wx0 < ov_min_px then
         local mid = (wx0 + wx1) / 2
         wx0, wx1 = mid - ov_min_px / 2, mid + ov_min_px / 2
@@ -2927,6 +2931,17 @@ local function tl_init()      -- 整块塞进一个函数：Lua 5.1 主块最多
 -- 可用 tl_zoom_steps = '普通,细,粗' 自己调（重启生效）
 local TL_STEP = { plain = 1.10, ctrl = 1.03, shift = 1.35, key = 2.0 }
 local TL_PAN  = { plain = 0.10, shift = 0.25 }
+-- 概览条最小环心距要按系统 dpi 放大：mpv 的 OSD 坐标是**窗口物理像素**
+-- （display-width 报 2560 而屏幕物理宽就是 2560），而 Pr 的 22 px 是**逻辑像素**。
+-- display-hidpi-scale 只在有窗口时才有值，用 observe 跟着走（全屏 / 换显示器会变）；
+-- 取不到就按 1.0 —— 800p@100% 下 22*1.0 就是 22，与原来 27 的观感基本一致。
+do
+    local hv = mp.get_property_number('display-hidpi-scale')
+    if hv and hv > 0 then TL.hidpi = hv end
+    mp.observe_property('display-hidpi-scale', 'number', function(_, n)
+        if n and n > 0 then TL.hidpi = n end
+    end)
+end
 do
     local a, b, c = tostring(o.tl_zoom_steps or ''):match('([%d%.]+)%s*,%s*([%d%.]+)%s*,%s*([%d%.]+)')
     if tonumber(a) and tonumber(b) and tonumber(c) then
@@ -3227,50 +3242,44 @@ local function tl_ov_time(g, mx, kind, l0, r0)
     return f * g.dur
 end
 
--- 概览条 'bar' 映射（Pr NS3/NS3b 实测定论）：
+-- 概览条 'bar' 映射（Pr 入出点标记实测，2026-10-25 定论）：
 --   u = (t1-t0)/dur, c = (t0+t1)/(2*dur)
---   宽 w = u^pow（只由区间大小决定）；中心 xc = 0.5 + (c-0.5)*k（线性、斜率 k>1）
---   left = xc - w/2, right = xc + w/2，再夹到 [0,1]（贴边时 Pr 也是夹住不是压缩）
---   实测：u=1/2 时宽占比 0.4057、k=1.1886；五个位置预测误差 < 1.6 px
--- k 不是常数：NS4 A/B 两轮实测 u=1/2→1.19、1/4→1.1186、1/8→1.074、1/16→1.046，
--- 即 k(u) = 1 + (k05-1)*(u/0.5)^0.68 —— 缩得越深越接近线性（否则深层偏移 100+ px）
+--   **left = c - u/2, right = c + u/2 —— 纯线性，宽度和位置都直接由时间比例给出**
+--   再夹到 [0,1]（贴边时 Pr 也是夹住不是压缩），宽度不足时以区间中心为锚撑到最小环心距。
+--
+-- 历史（P1，别再走回头路）：
+--   r44~r47 这里是 w = u^pow、xc = 0.5+(c-0.5)*k(u)，pow 由「最小跨度正好画成 27 px」反推。
+--   那套参数是在**底部可视范围滑块**上拟合的（w = u^0.478、k = 0.52~0.96），而概览条上 Pr 画的是
+--   **入出点标记**，两者是不同控件：滑块走幂律，入出点标记完全线性（5 min 片 x = 14 + 0.1384·t、
+--   15 min 片 x = 11.7 + 0.04626·t，残差 ≤1 px，31 帧 = 4.3 px 也分成两条）。
+--   照滑块拟合去画入出点标记 ⇒ 长素材 u=0.87 时 w 已经 0.936，视觉上几乎满条但时间不是 0~全长（P1）。
+--   所以两个函数现在都是恒等：保留名字只为 TL.bar_k 在 tl_ov_time 里兼作存在性检查（:3208）。
 TL.bar_k = function(u)
-    local k5 = tonumber(o.tl_ov_k) or 1.19
-    if not u or u >= 0.5 then return k5 end
-    return 1 + (k5 - 1) * math.min(1, u / 0.5) ^ 0.68
+    return 1
 end
 
--- 条宽曲线的指数：**反推**，让"最小跨度"正好画成 tl_ov_min_px 那么宽
--- （w = u^pow，令 u = minspan/dur 时 w·rw = W ⇒ pow = ln(W/rw) / ln(minspan/dur)）。
--- 这样最小档就是真实映射的结果，不需要"撑开"，环不会被推到映射外 ⇒ 拖圆不漂（用户 m04083/m04194）。
--- 副产品：pow 自动随片长变（30 s ≈1.24、60 min ≈0.47），与 Pr 实测两点（1.33 / 0.478）几乎重合。
--- 反推不成立时（rw 未知、片长接近最小跨度、越界）回退到按 log10(片长) 插值的老口径。
 TL.bar_pow = function(dur)
-    local p = tonumber(o.tl_ov_pow)
-    if p and p > 0 then return p end                       -- 显式数字 = 固定值（老口径/对照用）
-    local d = math.max(1, tonumber(dur) or 1)
-    local g = TL.geo
-    local rw = g and tonumber(g.rw) or 0
-    local W = tonumber(o.tl_ov_min_px) or 0
-    if W <= 0 then W = 2 * ((g and tonumber(g.cr)) or 6) + 2 end
-    local ms = tl_min_span()
-    if rw > 0 and W > 0 and ms > 1e-6 and ms < d * 0.999 then
-        local u, w = ms / d, W / rw
-        if u > 1e-9 and u < 1 and w > 0 and w < 1 then
-            local v = math.log(w) / math.log(u)
-            if v >= 0.30 and v <= 1.40 then return v end
-        end
-    end
-    local v = 1.33 - 0.4096 * (math.log(d) / math.log(10) - 1.477)
-    if v < 0.42 then v = 0.42 elseif v > 1.40 then v = 1.40 end
-    return v
+    return 1
+end
+
+-- 概览条最小环心距（px）：显式配置优先，0 = 自动按系统 dpi 放大 Pr 的 22 逻辑 px。
+-- mpv 的 OSD 坐标是**窗口物理像素**（display-width 报 2560 而屏幕就是 2560 物理），
+-- 所以要乘 display-hidpi-scale 才能得到与 Pr 相同的视觉大小（Pr 自己是按逻辑像素布局的）。
+-- ⚠️ 这里**不要**给 TL.hidpi 赋默认值：tl_init() 在下面几百行之外就可能被调用，
+-- 模块级赋值会晚于它执行并把 observe 拿到的真实值覆盖成 1.0。取不到时按 1.0 兜底即可。
+TL.ov_min_px = function()
+    local v = tonumber(o.tl_ov_min_px) or 0
+    if v > 0 then return v end
+    local d = tonumber(TL.hidpi) or 1.0
+    if d <= 0 then d = 1.0 end
+    return math.max(6, math.floor(22 * d + 0.5))
 end
 
 TL.bar_geom = function(t0, t1, dur)
     if not dur or dur <= 0 then return 0, 1 end
     local u = math.max(0, math.min(1, (t1 - t0) / dur))
     local c = math.max(0, math.min(1, (t0 + t1) / (2 * dur)))
-    local w = u ^ TL.bar_pow(dur)
+    local w = u                       -- P1 线性化：宽度 = 区间占比本身（原来 w = u^pow）
     -- 贴边必须**钉住**：区间碰到片头/片尾时，那一端就固定在 0/1，宽度照旧由 u 决定。
     -- 否则中心公式（xc 带 k>1 的放大）会让"本该不动的另一端"跟着漂 —— 用户实测：
     -- 播放头 0 时拖右圆从最小到最大，左端在 16s 起右移、23s 到顶、30s 回到原位（复现：138→147→138）。
@@ -3360,7 +3369,7 @@ end
 -- w = b-a 定 u，u 定 span；xc = (a+b)/2 定 c，再由 c 定时中 ⇒ 两端时间。
 TL.bar_solve_px = function(dur, anchor, target, side, minw, edge)
     if not dur or dur <= 0 or not anchor then return nil end
-    local pow = TL.bar_pow(dur)          -- 必须与绘制同一口径，否则反解与画面错位（= 漂移）
+    -- P1 线性化：a/b 本身就是时间占比，宽度 w = b-a 直接就是 u，不需要再开 1/pow 次方。
     local a, b
     if side == 'right' then a, b = anchor, target else a, b = target, anchor end
     -- 鼠标被拖出概览条的 x 范围时，target 会跑到 [0,1] 之外。以前这里直接走到下面 u>1 ⇒ return nil，
@@ -3374,7 +3383,7 @@ TL.bar_solve_px = function(dur, anchor, target, side, minw, edge)
     end
     local w = b - a
     if w <= 1e-6 then return nil end
-    local u = w ^ (1 / pow)
+    local u = w
     if u > 1 then return nil end
     local span = u * dur
     -- 贴片头/片尾：绘制那边是**钉死**那一端（l=0,w 或 1-w,1），反解必须走同一条式子。
@@ -3388,7 +3397,7 @@ TL.bar_solve_px = function(dur, anchor, target, side, minw, edge)
     elseif (edge == 'tail' and side == 'left') or (side == 'left' and anchor >= 1 - 1e-9) then
         return math.max(0, dur - span), dur
     end
-    local c = 0.5 + ((a + b) / 2 - 0.5) / TL.bar_k(u)
+    local c = (a + b) / 2                    -- 线性化：中心就是两端中点，没有 k>1 的放大
     local mid = c * dur
     return mid - span / 2, mid + span / 2
 end
@@ -3676,7 +3685,10 @@ local function tl_grab_move(g, mx)
         end
         local pa, pb
         if pinpx and (kind_eff == 'left' or kind_eff == 'right') then
-            local wmin = (minspan / g.dur) ^ TL.bar_pow(g.dur)
+            -- P4：反解的宽度下限必须与绘制侧的撑开**同源**（都用最小环心距归一化）。
+            -- 原来只用 minspan/dur，绘制侧却另外撑到 27 px ⇒ 最窄档环心算在真实位置、
+            -- 画出来的环却被撑开，两者差半个撑开量，拖起来就是"抓到的和看到的不是一个东西"。
+            local wmin = math.max(minspan / g.dur, TL.ov_min_px() / math.max(1, g.rw))
             local anchor = kind_eff == 'right' and gr.l0 or gr.r0
             -- 抓取时区间贴片头/片尾 ⇒ 绘制那边是钉死那一端，反解也必须钉死，
             -- 否则中心公式会把"贴头"解成别处的等宽区间（1 h 素材上偏到 48 s，用户报的漂移）。
@@ -3687,19 +3699,18 @@ local function tl_grab_move(g, mx)
                 -- 时间越界：先看是**哪一端**出头，再按那一侧的贴边公式重解
                 --   左端出头 ⇒ t0=0，宽度 = 右端的归一化位置（抓右端时右端跟手，否则用抓起时的锚 r0）
                 --   右端出头 ⇒ t1=dur，宽度 = 1 - 左端的归一化位置（抓左端时左端跟手，否则用锚 l0）
-                local pow = TL.bar_pow(g.dur)
                 local w
                 if pa < -1e-9 then
                     w = (kind_eff == 'right') and target_eff or anchor
                     if w and w > 0 and w <= 1 then
-                        local span = math.max(minspan, math.min(g.dur, (w ^ (1 / pow)) * g.dur))
+                        local span = math.max(minspan, math.min(g.dur, w * g.dur))
                         pa, pb = 0, span
                     else pa = nil end
                 elseif pb > g.dur + 1e-9 then
                     local lpos = (kind_eff == 'left') and target_eff or anchor
                     w = 1 - lpos
                     if w and w > 0 and w <= 1 then
-                        local span = math.max(minspan, math.min(g.dur, (w ^ (1 / pow)) * g.dur))
+                        local span = math.max(minspan, math.min(g.dur, w * g.dur))
                         pa, pb = g.dur - span, g.dur
                     else pa = nil end
                 else

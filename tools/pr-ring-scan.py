@@ -50,7 +50,7 @@ def rings(path, y0, y1):
     h = im.shape[0]
     y0 = max(2, y0)
     y1 = min(h - 2, y1)
-    best = None
+    votes = {}
     for y in range(y0, y1):
         lum = im[y].mean(axis=1)
         on = lum > 100
@@ -73,9 +73,14 @@ def rings(path, y0, y1):
                 i += 2
             else:
                 i += 1
-        if len(pairs) >= 2 and (best is None or len(pairs) > best[3]):
-            best = (y, pairs[0], pairs[-1], len(pairs))
-    return best
+        if len(pairs) >= 2:
+            key = (round(pairs[0]), round(pairs[-1]))
+            votes.setdefault(key, []).append((y, pairs[0], pairs[-1]))
+    if not votes:
+        return None
+    key, rows = max(votes.items(), key=lambda kv: len(kv[1]))
+    y, l, r = rows[len(rows) // 2]
+    return (y, l, r, len(rows))
 
 
 def main():
