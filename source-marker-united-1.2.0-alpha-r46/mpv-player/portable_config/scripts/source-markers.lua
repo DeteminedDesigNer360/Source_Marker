@@ -2956,7 +2956,7 @@ local function tl_min_span()
     local fr = tonumber(o.tl_min_frames) or 40
     if fr < 1 then fr = 1 end
     local s = fr / (get_fps() or 25)
-    -- r47：默认只按帧（与片长无关）。Pr 实测（测量-Pr概览条与最小可视范围.md）：
+    -- r47：默认只按帧（与片长无关）。Pr 实测（测量-Pr概览条与最小可见范围.md）：
     --   30 s 素材缩到最短 = 1.447 s 可视范围（43.4 帧）、60 min 素材 = 6.17 s（148 帧）
     --   ⇒ 能缩多细与片长无关；旧做法用概览条 40 px 反推，会得到恒定 8.07% 片长
     --   （1 h → 290 s / 8714 帧），这正是"1 h 素材只能到 5 min"的根因。
@@ -3155,9 +3155,14 @@ local function tl_follow_tick(why)
     local now = mp.get_time()
     if now - TL_FOLLOW_T < 0.15 then return end            -- 节流：time-pos 变化很密
     TL_FOLLOW_T = now
-    tl_play_follow_check(why, true)
+    -- 读真实 pause：暂停态 seek 出可见范围也要拉回来。
+    -- 原来写死 true，pr 模式（播放中不动）会把它当成播放中直接 return 掉。
+    tl_play_follow_check(why)
 end
-mp.observe_property('time-pos', 'number', function() tl_follow_tick('播放') end)
+mp.observe_property('time-pos', 'number', function()
+    -- why 按真实状态写：暂停下的 seek 也走这里，叫「播放」会误导排查
+    tl_follow_tick(mp.get_property_native('pause') == false and '播放' or '暂停·跳转')
+end)
 mp.observe_property('pause', 'native', function(_, p)
     if p then tl_play_follow_check('暂停', false) end
 end)
