@@ -3543,7 +3543,12 @@ local function tl_grab_move(g, mx)
         -- 进用 0.02、出用 0.05（迟滞），状态记在 gr.sym —— 这样“拖到一半进入同动”和“退出同动”都成立。
         local span_cur = math.max(1e-9, g.t1 - g.t0)
         pn = (tph and tph > g.t0 + 1e-9 and tph < g.t1 - 1e-9) and (tph - g.t0) / span_cur or nil
-        local EPS = 0.02
+        -- P2①：进同动（以播放头为轴对称缩放）的提前窗口。跨度只在 pn 恰好到 0.5 时
+    -- 才保证 <= hi（hi = min(2*tph, 2*(dur-tph))），窗口越宽、进入那一刻被 min(跨度,hi)
+    -- 钳掉的量越大 ⇒ 另一端瞬间左移。实测 EPS=0.02 时跳幅可达跨度的 4%（0~30@10 抓左圆：
+    -- 0~20.791 一帧变 0~20.000，跳 0.791 s）。收窄到 0.002（约等于一帧的 pn 变化量）后
+    -- 跨过 0.5 的情形由 crossed_half 兜住，不会因此进不去。
+    local EPS = 0.002
         -- 按"新跨度 sp 该摆在哪里"落位（越界/最小跨度交给 tl_clamp_range）：
         --   · 播放头在正中 → 两圆对称于播放头（缩、放都对称）
         --   · 播放头在区间外 → 被抓那端动
@@ -3624,11 +3629,11 @@ local function tl_grab_move(g, mx)
         if gr.kind ~= 'mid' and (in_win or gr.edge_lock) and not gr.sym_block and TL.bar_solve_center then
             local hi = math.min(2 * tph, 2 * (g.dur - tph))
             if gr.sym_ready == nil then
-                -- 进入同动的**第一帧**：跨度保持不变，只把中点点到播放头上（跳幅 = |区间中点−播放头|，模式切换的固有最小值）；
-                -- 同时记下"鼠标位置 − 被抓端位置"的偏移 gr.sym_off，后面每帧都用它换算 ——
-                -- 否则切模式那一下会按鼠标绝对位置重排区间（实测跳 0.3~0.9 s）
-                -- pn 落进窗口时，跨度理论上已经 <= hi（pn=0.5 ⇔ span=2(tph-t0) <= hi），
-                -- 但帧步进可能跨过 0.5，于是 span 略大于 hi —— 这时用 hi 居中（跳幅 <= 0.02*span）。
+                -- 进入同动的**第一帧**：跨度取 min(当前跨度, hi)，然后以播放头居中。
+                -- 跳幅 = max(0, 跨度 − hi)，只在「跨度已经超过对称上限」时非零：
+                --   · 跨过 pn=0.5 触发（crossed_half）：此时 pn≥0.5 ⇒ 跨度≤2(tph−t0)≤hi ⇒ 跳幅恒为 0；
+                --   · 落进 |pn−0.5|<=EPS 窗口触发：跨度≈hi/(2pn)，跳幅≈2·EPS·hi（P2① 实测 EPS=0.02 时
+                --     0~30@10 抓左圆跳 0.791 s，占跨度 3.8%）。EPS 已收窄到 0.002 ⇒ 跳幅 ≤0.4% 跨度。
                 -- 以前这里要求 sp_cur < hi 才进，跨过 0.5 的那一帧就把 sym_ready 设成 false，
                 -- 之后再也不重试 ⇒ 用户看到“有概率不进入双动”（0~15@4 抓右圆几乎必现）。
                 local sp_cur = math.min(g.t1 - g.t0, hi)
@@ -3665,7 +3670,7 @@ local function tl_grab_move(g, mx)
                         sp = rend                              -- 撞边：那一端钉死，右端继续按同一速度外扩
                     end
                 else
-                    local lend = (gr.sym_l0 or (tph - hi / 2)) - d
+                    local lend = (gr.sym_l0 or (tph - hi / 2)) + d
                     if lend >= -1e-9 then
                         sp, lock = 2 * (tph - lend), nil
                     else
