@@ -1082,6 +1082,10 @@ end
 -- 前向声明：下面这两件事定义在文件后段（Lua 的 local 必须先声明后使用）
 local save_ui_state = nil        -- 界面状态持久化（定义在文件末尾附近）
 local redraw_ui      = nil        -- 面板 / 帮助浮窗重绘（定义在按钮面板那一段之后）
+-- P5-1：输入框打开期间临时隐藏控制栏与时间轴。mpv 的 mp.input 输入框画在屏幕底部，
+-- 正好被 Pr 风格控制栏压住（用户报「下方的操作栏会把 console 挡住」）。
+-- 只在这个开关上做判断，不动 UI.bar —— 用户对 OSD 的设置不能因为我们弹一次输入框就被改掉。
+local UI_INPUT_HIDDEN = false
 
 local function toggle_list()
     S.show_list = not S.show_list
@@ -1251,7 +1255,9 @@ end
 
 local function step_marker(delta)
     if #S.markers == 0 then
-        notify(string.format('附近 %g 秒内没有标记（当前共 %d 条）', NEAREST_WINDOW, #S.markers))
+        -- 跳标记时一条都没有：原来复用「附近 N 秒内没有标记」那句话，读起来像"标记在别处"，
+        -- 实际是根本没有。跳转方向由 delta 决定，提示里也点一句，免得用户以为跳错方向。
+        notify(string.format('该方向已没有标记（当前共 %d 条，按 M 新建）', #S.markers))
         return
     end
     local head = head_time() or 0
@@ -1417,9 +1423,15 @@ local function ask_text(prompt, default, callback)
     local function deliver(text)
         if answered then return end
         answered = true
+        if UI_INPUT_HIDDEN then
+            UI_INPUT_HIDDEN = false
+            if redraw_ui then redraw_ui() end        -- 答完立刻把控制栏画回来
+        end
         callback(text)
     end
     if input then
+        UI_INPUT_HIDDEN = true                       -- P5-1：让开底部，输入框才看得见
+        if redraw_ui then redraw_ui() end
         input.get({
             prompt = prompt,
             default_text = default or '',
@@ -2468,7 +2480,7 @@ end
 local function render_prbar()
     local m = prbar_metrics()
     bar_sections_off()
-    if not (UI.bar and UI.style == 'prbar') then
+    if UI_INPUT_HIDDEN or not (UI.bar and UI.style == 'prbar') then
         PRBAR_BUTTONS = {}
         set_overlay(overlay_bar, nil, m.w, m.h)
         return
@@ -2616,7 +2628,7 @@ end
 local function render_timeline()
     local m = tl_metrics()
     local t0, t1, dur = tl_span()
-    if not (UI.bar and UI.style == 'prbar' and o.tl) or not t0 then
+    if UI_INPUT_HIDDEN or not (UI.bar and UI.style == 'prbar' and o.tl) or not t0 then
         set_overlay(overlay_tl, nil, m.w, m.h)
         if TL.place then TL.place(nil) end          -- 隐藏时把可点区域一并清掉
         return
@@ -3166,14 +3178,15 @@ end)
 mp.observe_property('pause', 'native', function(_, p)
     if p then tl_play_follow_check('暂停', false) end
 end)
-local function tl_wheel_frame(dir)
+local function tl_wheel_frame(dir, steps)
+    local n = math.max(1, math.floor(tonumber(steps) or 1))
     local before = mp.get_property_number('time-pos') or 0
     local fps = mp.get_property_number('estimated-vf-fps') or 30
-    local tf = math.floor(before * fps + 0.5) + (dir > 0 and 1 or -1)
+    local tf = math.floor(before * fps + 0.5) + (dir > 0 and n or -n)
     if tf < 0 then tf = 0 end
     mp.set_property_number('time-pos', tf / fps)
-    log('时间轴·滚轮刻度区 → %s：自 %.3f 到帧 %d（%.3f）',
-        dir > 0 and '前进一帧' or '后退一帧', before, tf, tf / fps)
+    log('时间轴·滚轮刻度区 → %s %d 帧：自 %.3f 到帧 %d（%.3f）',
+        dir > 0 and '前进' or '后退', n, before, tf, tf / fps)
     tl_follow_playhead('滚轮')
 end
 local function tl_wheel(dir)          -- dir > 0 = 滚轮向上
@@ -3190,10 +3203,25 @@ local function tl_wheel(dir)          -- dir > 0 = 滚轮向上
 end
 tl_bind_wheel('wheel_up',   function() tl_wheel(1) end)
 tl_bind_wheel('wheel_down', function() tl_wheel(-1) end)
-tl_bind_wheel('Ctrl+wheel_up',   function() tl_zoom(TL_STEP.ctrl, 'Ctrl+滚轮上') end)
-tl_bind_wheel('Ctrl+wheel_down', function() tl_zoom(1 / TL_STEP.ctrl, 'Ctrl+滚轮下') end)
-tl_bind_wheel('Shift+wheel_up',   function() tl_zoom(TL_STEP.shift, 'Shift+滚轮上') end)
-tl_bind_wheel('Shift+wheel_down', function() tl_zoom(1 / TL_STEP.shift, 'Shift+滚轮下') end)
+-- P3（r53）：Pr 在**刻度带**上的语义与概览条不同 —— Ctrl+滚轮 = 单纯滚轮（挪 1 帧）、
+-- Shift+滚轮 = 挪 5 帧；只有落在概览条上才是精细 / 粗缩放。
+-- 区域外保持原来的全局缩放（画面区滚轮仍缩放时间轴），老习惯不变。
+local function tl_wheel_mod(dir, kind)
+    local pos = TL_WHEEL_POS or mp.get_property_native('mouse-pos') or {}
+    local reg = tl_wheel_region(pos.x, pos.y)
+    local tag = (kind == 'shift' and 'Shift' or 'Ctrl') .. '滚轮' .. (dir > 0 and '上' or '下')
+    if reg == 'axis' then
+        -- 与裸滚同向：滚轮向上 = 后退（Pr 口径），见 tl_wheel 里对 tl_wheel_frame(-dir) 的说明
+        tl_wheel_frame(-dir, kind == 'shift' and 5 or 1)
+        return
+    end
+    local step = (kind == 'shift') and TL_STEP.shift or TL_STEP.ctrl
+    tl_zoom(dir > 0 and step or 1 / step, tag)
+end
+tl_bind_wheel('Ctrl+wheel_up',   function() tl_wheel_mod(1, 'ctrl') end)
+tl_bind_wheel('Ctrl+wheel_down', function() tl_wheel_mod(-1, 'ctrl') end)
+tl_bind_wheel('Shift+wheel_up',   function() tl_wheel_mod(1, 'shift') end)
+tl_bind_wheel('Shift+wheel_down', function() tl_wheel_mod(-1, 'shift') end)
 tl_bind_wheel('Alt+wheel_up',   function() tl_pan(-TL_PAN.plain, 'Alt+滚轮上') end)
 tl_bind_wheel('Alt+wheel_down', function() tl_pan(TL_PAN.plain, 'Alt+滚轮下') end)
 tl_bind_wheel('Shift+Alt+wheel_up',   function() tl_pan(-TL_PAN.shift, 'Shift+Alt+滚轮上') end)
@@ -4008,9 +4036,14 @@ mp.register_script_message('tl-goto', function(str)
 end)
 
 -- 自动化取证：tl-wheel-at x y dir —— 用给定坐标走一遍滚轮（本机不能注入鼠标）
-mp.register_script_message('tl-wheel-at', function(x, y, dir)
+mp.register_script_message('tl-wheel-at', function(x, y, dir, mod)
     TL_WHEEL_POS = { x = tonumber(x), y = tonumber(y) }
-    local ok, err = pcall(tl_wheel, tonumber(dir) or 1)
+    local d = tonumber(dir) or 1
+    local m = tostring(mod or ''):lower()
+    -- P3：第 4 个参数给出修饰键就走去修饰键那条路（ctl 键位本身不能离线注入，只能这样取证）
+    local ok, err = pcall(function()
+        if m == 'ctrl' or m == 'shift' then tl_wheel_mod(d, m) else tl_wheel(d) end
+    end)
     TL_WHEEL_POS = nil
     if not ok then log('时间轴·滚轮取证失败：%s', tostring(err)) end
 end)

@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>术语标准 · 元素与操作（图解）</title>
+<style>
+  :root{--bg:#17171a;--panel:#1f2024;--line:#33353c;--text:#e8e9ec;--dim:#9aa0ab;
+        --accent:#4da6ff;--warn:#ffb45a;--measure:#5ee0a8}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:14px/1.6 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  header{padding:18px 24px 10px;border-bottom:1px solid var(--line)}
+  h1{margin:0 0 6px;font-size:19px;font-weight:600}
+  header p{margin:0;color:var(--dim);font-size:13px}
+  header code,.legend code,.tables code{color:#8fe38f;background:#20242b;padding:1px 5px;
+      border-radius:4px;font-family:Consolas,monospace;font-size:12.5px}
+  nav{display:flex;gap:8px;margin-top:12px;align-items:center;flex-wrap:wrap}
+  nav button{background:var(--panel);color:var(--dim);border:1px solid var(--line);
+             padding:7px 14px;border-radius:7px;cursor:pointer;font-size:13px}
+  nav button:hover{color:var(--text);border-color:#4a4d57}
+  nav button.on{background:#22405f;color:#cfe6ff;border-color:#3f6d9e}
+  nav label{color:var(--dim);font-size:13px;cursor:pointer;user-select:none;margin-left:6px}
+  .view{display:none;padding:18px 24px 34px}
+  .view.on{display:block}
+  .stage{position:relative;display:inline-block;width:100%;max-width:1680px;border:1px solid var(--line);
+         border-radius:8px;overflow:hidden;background:#000}
+  .stage img{display:block;width:100%;height:auto}
+  .hot{position:absolute;border-radius:4px;cursor:help;
+       transition:background .08s,outline-color .08s}
+  .hot.c1{outline:1px solid rgba(77,166,255,.60);background:rgba(77,166,255,.10)}
+  .hot.c2{outline:1px dashed rgba(255,180,90,.55);background:rgba(255,180,90,.05)}
+  .hot.c3{outline:1px solid rgba(94,224,168,.60);background:rgba(94,224,168,.10)}
+  .hot.c1:hover{background:rgba(77,166,255,.26);outline:2px solid var(--accent);
+                box-shadow:0 0 0 2px rgba(77,166,255,.30)}
+  .hot.c2:hover{background:rgba(255,180,90,.20);outline:2px solid var(--warn);
+                box-shadow:0 0 0 2px rgba(255,180,90,.25)}
+  .hot.c3:hover{background:rgba(94,224,168,.26);outline:2px solid var(--measure);
+                box-shadow:0 0 0 2px rgba(94,224,168,.30)}
+  .hot::after{content:attr(data-n);position:absolute;left:0;top:-17px;
+              font-size:11px;line-height:1;padding:2px 5px;border-radius:4px;
+              background:rgba(20,30,44,.94);color:#bcd9f7;border:1px solid #2c4666;
+              white-space:nowrap;opacity:0;transition:opacity .1s;pointer-events:none}
+  .hot:hover::after{opacity:1}
+  .hot.lb::after{top:auto;bottom:-17px}
+  body.all .hot::after{opacity:1}
+  .rz{display:none;position:absolute;right:-6px;bottom:-6px;width:12px;height:12px;
+      background:#4da6ff;border:1px solid #fff;border-radius:2px;
+      cursor:nwse-resize;z-index:2}
+  body.dbg .hot{outline-width:2px;cursor:move;background:rgba(94,224,168,.06)}
+  body.dbg .hot::after{opacity:1}
+  body.dbg .hot .rz{display:block}
+  body.dbg .hot:hover{box-shadow:none}
+  #tip{position:fixed;z-index:99;max-width:400px;pointer-events:none;
+       background:#0e0f12;color:var(--text);border:1px solid #3f6d9e;
+       border-radius:8px;padding:10px 13px;font-size:13px;line-height:1.7;
+       box-shadow:0 8px 26px rgba(0,0,0,.6);display:none}
+  #tip b{color:#9fd0ff;font-weight:600}
+  #tip code{color:#8fe38f;background:#20242b;padding:1px 5px;border-radius:4px;
+            font-family:Consolas,monospace;font-size:12.5px}
+  .legend{margin-top:12px;color:var(--dim);font-size:12.5px}
+  .legend b{color:#c9d4e2}
+  .key{display:inline-block;width:11px;height:11px;border-radius:2px;margin:0 4px 0 10px;
+       vertical-align:-1px}
+  .key.k1{background:rgba(77,166,255,.35);outline:1px solid #4da6ff}
+  .key.k2{background:rgba(255,180,90,.25);outline:1px dashed #ffb45a}
+  .key.k3{background:rgba(94,224,168,.30);outline:1px solid #5ee0a8}
+  .tables{padding:6px 24px 60px;border-top:1px solid #2a2c32;margin-top:28px}
+  .tables h2{font-size:15px;margin:26px 0 8px;color:#cfe6ff;font-weight:600}
+  .tables table{border-collapse:collapse;font-size:13px;width:100%;max-width:1240px}
+  .tables th,.tables td{border:1px solid #2c2f36;padding:6px 10px;text-align:left;vertical-align:top}
+  .tables th{background:#20232a;color:#b9c4d2;font-weight:600}
+  .tables tr:nth-child(even) td{background:#1b1d22}
+  .tables td:first-child{color:#9fd0ff;font-weight:600;white-space:nowrap}
+  .tables .bad{color:#ff9a8a}
+  #dbgbox{display:none;position:fixed;left:0;right:0;bottom:0;z-index:300;
+          background:#101216;border-top:1px solid #3f6d9e;padding:9px 14px;
+          font:12.5px/1.7 Consolas,"Microsoft YaHei",monospace;max-height:44vh;overflow:auto}
+  #dbgbox b{color:#9fd0ff}
+  #dbgbox button{background:#22405f;color:#cfe6ff;border:1px solid #3f6d9e;
+                 padding:4px 10px;border-radius:6px;cursor:pointer;margin-left:10px;font-size:12.5px}
+  #dbginfo{color:#5ee0a8;margin-left:14px}
+  #dbgout{display:none;width:100%;height:160px;margin-top:8px;background:#0b0c0f;
+          color:#9fe3b0;border:1px solid #2c4666;border-radius:6px;padding:8px;
+          font:12px/1.5 Consolas,monospace;resize:vertical}
+  body.dbg{padding-bottom:70px}
+</style>
+</head>
+<body>
+<header>
+  <h1>术语标准 · 元素与操作（图解）</h1>
+  <p>鼠标移到图上虚框处看说明。
+     <span class="key k2"></span>橙虚框＝容器级
+     <span class="key k1"></span>蓝实框＝具体元素
+     <span class="key k3"></span>绿实框＝段与度量（横轴 / 轨道 / 环心距）
+     ·　完整文字版见 <code>docs\术语标准-元素与操作.md</code></p>
+  <nav>
+    <button data-view="mpv" class="on">mpv · 控制栏样式</button>
+    <button data-view="classic">mpv · 按钮面板（F2）</button>
+    <button data-view="pr">Pr · 源监视器时间轴</button>
+    <label><input type="checkbox" id="all"> 显示全部名称</label>
+    <label><input type="checkbox" id="dbg"> 调试模式（拖框校准）</label>
+  </nav>
+</header>
+
+<section class="view on" id="v-mpv">
+  <div class="stage">
+    <img src="术语标准-图/mpv-1680.png" alt="mpv 时间轴">
+  </div>
+  <p class="legend">点一下<b>横轴</b>它会变白并跟随鼠标平移 —— 这个状态叫<b>激活</b>，再点一下放下回到<b>非激活</b>。
+     这张图里看不到 <b>按钮面板</b>（F2 浮窗），见第二个页签。<br><b>层级</b>：<b>轨道</b>（全长槽，固定）⊃ <b>概览条</b>（滑块 <code>⚪====⚪</code>，宽 = 环心距）⊃｛<b>横轴</b> ＋ <b>环</b> ×2｝。就像滑块：槽不动，滑块在里面跑。</p>
+</section>
+
+<section class="view" id="v-classic">
+  <div class="stage">
+    <img src="术语标准-图/mpv-classic-1680.png" alt="mpv 按钮面板">
+  </div>
+  <p class="legend">这是 <b>样式 = panel</b>（按钮面板，<code>UI.style='panel'</code>），F2 开关；
+     与 <b>控制栏</b>（<code>UI.style='prbar'</code>）互斥显示。</p>
+</section>
+
+<section class="view" id="v-pr">
+  <div class="stage">
+    <img src="术语标准-图/pr-源监视器.png" alt="Pr 源监视器时间轴">
+  </div>
+  <p class="legend">Pr 的<b>概览条</b>（最底下那条滑块）控制的正是<b>可见范围</b>，与 mpv 同构。
+     上面那条灰带才是<b>中括号</b>（出入点）。</p>
+</section>
+
+<section class="tables">
+  <h2>一、操作与状态（图上标不出来，靠这段）</h2>
+  <table>
+    <tr><th>正式名</th><th>指什么</th><th>代码</th><th>别再叫成</th></tr>
+    <tr><td>激活</td><td>横轴被抓起后的状态：变白、跟随鼠标平移，再点一下放下</td><td>—</td><td>选中、按下、抓起、激活段</td></tr>
+    <tr><td>非激活</td><td>横轴的默认状态（不变白、不跟随鼠标）</td><td>—</td><td>未选中、松开</td></tr>
+    <tr><td>单动</td><td>拖环时只动被抓的那一端，另一端钉住</td><td><code>tl_grab_feel='mouse'</code></td><td>单端拖动、独立拖动</td></tr>
+    <tr><td>同动</td><td>两环<b>以播放头为轴对称</b>缩放</td><td><code>gr.sym</code></td><td>双动、联动、对称缩放</td></tr>
+    <tr><td>转嫁</td><td>单动的方向会让播放头远离中点时，改抓另一端</td><td><code>illegal</code> / <code>gr.trans</code></td><td>换手、翻转、镜像</td></tr>
+    <tr><td>钉住</td><td>决定「另一端」按像素不动还是按时间不动</td><td><code>tl_ov_pin='px'|'time'</code></td><td>锁定、固定</td></tr>
+    <tr><td>贴边</td><td>可见范围碰到片头 / 片尾</td><td><code>tl_ov_edge='pin'|'pr'</code></td><td>到边、触界、撞墙</td></tr>
+    <tr><td>缩放锚点</td><td>滚轮缩放时播放头落在哪里</td><td><code>tl_zoom_anchor</code></td><td>锚点、基准点</td></tr>
+    <tr><td>最小跨度</td><td>时间轴最多能放大到多少帧</td><td><code>tl_min_frames</code>（默认 40 f）</td><td>最小宽度、最小可视区间</td></tr>
+    <tr><td>播放跟随</td><td>播放/暂停时可见范围要不要跟着播放头走</td><td><code>tl_play_follow='pr'</code></td><td>自动跟随、滚动跟随</td></tr>
+  </table>
+
+  <h2>二、控制栏与面板</h2>
+  <table>
+    <tr><th>正式名</th><th>指什么</th><th>代码</th><th>别再叫成</th></tr>
+    <tr><td>控制栏</td><td>Pr 风格的传输控制条</td><td><code>UI.bar</code> / <code>prbar_metrics()</code></td><td>工具栏、按钮条、底栏</td></tr>
+    <tr><td>按钮面板</td><td>第 8 条之前的浮窗按钮集（F2 开关，与控制栏共存但互斥显示）</td><td><code>UI.panel</code></td><td>面板、浮窗、F2 面板</td></tr>
+    <tr><td>样式</td><td>二选一：<code>prbar</code>（控制栏）或 <code>panel</code>（按钮面板）</td><td><code>UI.style</code></td><td>模式、外观</td></tr>
+  </table>
+
+  <h2>三、标记与文件</h2>
+  <table>
+    <tr><th>正式名</th><th>指什么</th><th>代码</th><th>别再叫成</th></tr>
+    <tr><td>标记</td><td>时间点上的一条记录（时间 + 颜色 + 备注）</td><td><code>S.marks</code></td><td>书签、点位、chapter</td></tr>
+    <tr><td>颜色号</td><td>标记颜色的 0..7 索引（绿红紫橙黄白蓝青）</td><td><code>color</code></td><td>色号、颜色索引</td></tr>
+    <tr><td>sidecar</td><td>与视频同名的 <code>.mpv-autosave.json</code> 自动保存文件</td><td><code>o.sidecar</code></td><td>存档、缓存文件</td></tr>
+    <tr><td>导出文件</td><td>用户主动导出的 JSON / CSV</td><td>—</td><td>输出文件、报告</td></tr>
+  </table>
+
+  <h2>四、已废弃的说法（看到就改）</h2>
+  <table>
+    <tr><th>废弃</th><th>改成</th><th>原因</th></tr>
+    <tr><td class="bad">亮段</td><td>横轴</td><td>2026-10-31 统一。「激活」是抓取状态，不是空间分段，别写成「激活段 / 非激活段」</td></tr>
+    <tr><td class="bad">可视范围 / 可视区间 / 可见区间</td><td>可见范围</td><td>2026-10-28 全仓统一（91 处 / 16 个 .md）</td></tr>
+    <tr><td class="bad">出入点区间</td><td>看语境：时间轴两端时间码说的是<b>可见范围</b>；中括号说的是<b>出入点</b></td><td>曾把两个独立实体叫成一个，导致「goto 不平移」被误判成「控件语义不同」</td></tr>
+    <tr><td class="bad">区间（单独出现）</td><td>写明是<b>可见范围</b>、<b>出入点</b>还是<b>拖动区间</b></td><td>「区间」在旧文档里同时指三件事</td></tr>
+  </table>
+</section>
+
+<div id="tip"></div>
+
+<div id="dbgbox">
+  <b>调试模式</b>　拖动热区本体＝移动；拖右下角蓝点＝改大小；点「导出坐标」把当前全部框的位置吐出来。
+  <button id="export">导出坐标</button>
+  <div id="dbginfo">未选中任何热区</div>
+  <textarea id="dbgout" readonly></textarea>
+</div>
+
+<script>
+const HOT = {"mpv":[{"n":"时间轴","c":2,"x":134,"y":810,"w":1406,"h":106,"t":"<b>时间轴</b> —— 控制栏正上方那整块面板：两端时间码 + 刻度带 + <b>轨道</b>（<b>概览条</b>在里面跑）。\n配置 <code>o.tl</code> / <code>UI.tl</code>。\n别叫：时间线、导轨。"},{"n":"刻度带","c":2,"x":144,"y":842,"w":1387,"h":47,"t":"<b>刻度带</b> —— 时间轴中部的刻度尺，随可见范围重新分格。\n别叫：标尺、ruler。"},{"n":"轨道","c":3,"x":148,"y":895,"w":1385,"h":15,"t":"<b>轨道</b> —— 时间轴最底下那条<b>全长槽</b>（宽 <code>rw</code>），固定不动，<b>概览条</b>在里面运动。\n它铺满整条，被概览条盖住的部分看不见 —— 鼠标在滑块（横轴 / 环）外的那截上时显示的就是它。\n⚠️ 槽的<b>视觉</b>长度是 <code>rw</code>，而<b>代码</b>里 <code>rw</code> 是环心行程：全片时环心贴槽两端，环会凸出槽外 <code>cr</code> px（P9 待修）。\n别叫：条、槽、track。"},{"n":"概览条","c":2,"x":205,"y":891,"w":237,"h":22,"t":"<b>概览条</b> —— 轨道里那个<b>滑块</b>，<code>⚪====⚪</code> 画的就是它本身：两头两个<b>环</b>、中间连着<b>横轴</b>。\n它沿<b>轨道</b>运动：拖环改一端，点横轴抓起整段平移。\n它的<b>宽度</b>就是<b>环心距</b>，随可见范围变化。\n代码 <code>tl_ov_*</code>。\n别叫：进度条、滚动条、滑块条。","lb":true},{"n":"中括号","c":2,"x":1053,"y":838,"w":144,"h":53,"t":"<b>中括号</b> —— <b>出入点</b>在时间轴上的框。\n代码 <code>IN_FRAME</code> / <code>OUT_FRAME</code>（帧号）。\n它和<b>可见范围</b>是两个独立实体：中括号跟用户设的入点出点走，「可见范围」是现在屏幕上显示哪一段。"},{"n":"控制栏","c":2,"x":616,"y":931,"w":447,"h":53,"t":"<b>控制栏</b> —— Pr 风格的传输控制条（盾形 / 入点 / 出点 / 步进 / 播放 / 截图）。\n代码 <code>UI.bar</code>、<code>prbar_metrics()</code>。\n与<b>按钮面板</b>互斥显示。\n别叫：工具栏、按钮条、底栏。"},{"n":"可见范围（左端）","c":1,"x":144,"y":815,"w":97,"h":24,"t":"<b>可见范围</b> —— 时间轴当前显示的那段时间窗，这里显示它<b>左端</b>的时间码。\n代码 <code>TL.t0</code> / <code>TL.t1</code>（秒）。\n别叫：可视范围、可视区间（2026-10-28 已全仓统一）。"},{"n":"可见范围（右端）","c":1,"x":1411,"y":815,"w":99,"h":23,"t":"<b>可见范围</b>的右端。\n注意：Pr 那边右端时间码显示的是「已选出入点区间长度」，<b>不是</b>可见范围终点 —— 两个实体别混。"},{"n":"播放头","c":1,"x":891,"y":843,"w":18,"h":50,"t":"<b>播放头</b> —— 当前播放位置那根蓝线。\n代码 <code>time-pos</code>。\n拖环时它是<b>同动</b>的对称轴。"},{"n":"标记头","c":1,"x":676,"y":858,"w":20,"h":20,"t":"<b>标记头</b> —— 每个标记在时间轴上的三角头，颜色即标记的颜色号。\n别叫：旗标、旗子。"},{"n":"标记头（2）","c":1,"x":829,"y":858,"w":20,"h":20,"t":"<b>标记头</b>（第二个标记）。点击可跳到该标记。"},{"n":"环（左）","c":1,"x":208,"y":894,"w":18,"h":16,"t":"<b>环</b>（圆环）—— <b>概览条</b>两头的空心圆，标出可见范围的两个端点，拖它改端点。\n点一下抓起时这个圆会画亮。\n别叫：圆点、滑块、把手、marker。"},{"n":"环（右）","c":1,"x":423,"y":895,"w":16,"h":14,"t":"<b>环</b>（右）。拖它的行为见<b>单动 / 同动 / 转嫁</b>三条术语。"},{"n":"横轴","c":3,"x":228,"y":894,"w":191,"h":12,"t":"<b>横轴</b> —— <b>概览条上</b>两环之间那段，就是<b>可见范围</b>的可视部分。\n点一下它<b>变白</b>并跟随鼠标左右平移（整段平移，不出片头片尾），这个状态叫<b>激活</b>；再点一下放下，回到<b>非激活</b>。\n宽度 = 可见范围占整片的比例（按幂律 w = u^p 压缩，不是线性）。\n别叫：亮段、高亮、填充、选中段。"},{"n":"环心距","c":3,"x":216,"y":887,"w":215,"h":7,"t":"<b>环心距</b> —— <b>概览条</b>两端两个环的<b>圆心</b>距离（不是内沿距，也不是外沿距），也就是<b>概览条的宽度</b>。\n代码 <code>tl_ov_min_px</code>，0 = 自动 <code>round(22 × dpi)</code>：Pr 实测最窄 22 逻辑 px，四片长恒定。\n别叫：环距、内沿距、外沿距、最小宽度。"}],"classic":[{"n":"按钮面板","c":2,"x":61,"y":703,"w":1103,"h":193,"t":"<b>按钮面板</b> —— 第 8 条之前的浮窗按钮集（<code>UI.panel</code>），F2 开关。\n与<b>控制栏</b>互斥显示，二者由 <code>UI.style</code> 二选一（<code>panel</code> / <code>prbar</code>）。\n别叫：面板、浮窗、F2 面板。"},{"n":"拖动把手","c":1,"x":79,"y":711,"w":35,"h":31,"t":"面板的拖动把手（<code>⋮⋮</code>），按住可以把整个面板拖到任意位置；拖动中它会变高亮。"},{"n":"标题 / 状态行","c":1,"x":122,"y":711,"w":351,"h":27,"t":"标题与状态行：<code>Source Markers | 颜色 &lt;n&gt; &lt;色名&gt; | &lt;n&gt; 个标记</code>。\n右边三个是 <code>帮助</code>、<code>OSD 显示/隐藏</code>、<code>−</code>（折叠）。"},{"n":"颜色号","c":3,"x":69,"y":749,"w":569,"h":45,"t":"<b>颜色号</b> —— 标记颜色的 0..7 索引（绿红紫橙黄白蓝青），点一下切换当前颜色。\n代码 <code>color</code>。\n别叫：色号、颜色索引。"},{"n":"按钮组（第一行）","c":3,"x":73,"y":800,"w":522,"h":40,"t":"打标记 / 打标记 + 正文 / 标记列表 / 下一个标记 / 上一个标记。"},{"n":"按钮组（第二行）","c":3,"x":69,"y":847,"w":1081,"h":42,"t":"按序跳转 / 改正文 / 删除标记 / 导出（三种）/ 导入标记 / 切换 OSD 样式 / 标记模式。"}],"pr":[{"n":"时间轴","c":2,"x":17,"y":769,"w":1646,"h":82,"t":"<b>时间轴</b>（Pr 侧，这里只有底部那一条）。\n范围：从左下角蓝色时间码（<code>00:07:25:02</code>）往上一点点，到最底下控制栏为止。"},{"n":"刻度带","c":2,"x":20,"y":822,"w":1641,"h":12,"t":"<b>刻度带</b> —— 只有与<b>播放头</b>同高的那一系列竖线，不含上面的彩色三角和下面的概览条。"},{"n":"中括号","c":2,"x":588,"y":811,"w":531,"h":22,"t":"<b>中括号</b> —— Pr 的<b>出入点</b>标记：一条灰带表示出入点之间的区间，左右两个蓝色小竖条就是入点和出点。\n它画在概览条<b>上方</b>，与下面那条可见范围滑块是两件事。"},{"n":"轨道","c":2,"x":19,"y":837,"w":1643,"h":11,"t":"<b>轨道</b>（Pr 侧）—— 最底下那条<b>全长槽</b>，<b>概览条</b>（两个把手 + 横轴）在里面滑动。\nPr 的槽**正好兜住把手外沿**，所以「轨道长度 = 概览条最大外沿距」在这里成立；mpv 那边槽短 2×cr，是 P9 待修的点。\n别叫：条、槽、track。"},{"n":"概览条","c":2,"x":80,"y":833,"w":1402,"h":17,"t":"<b>概览条</b>（Pr 侧）—— 轨道里那个滑块：两个<b>把手</b> + 把手之间的<b>横轴</b>（<b>把手相当于 mpv 的环</b>）。\n<b>它控制的就是可见范围</b>，与 mpv 的概览条同构。\n⚠️ 别把它叫成「出入点区间」—— 那是上面那条灰带。","lb":true},{"n":"控制栏","c":2,"x":623,"y":858,"w":502,"h":22,"t":"<b>控制栏</b>（Pr 的传输控制栏）。mpv 那侧的按钮顺序基本照它排。"},{"n":"标记头（绿）","c":1,"x":164,"y":794,"w":14,"h":20,"t":"<b>标记头</b> —— Pr 的标记（彩色三角），颜色即标记颜色，下面虚线指到它对应的帧。\n这张图里一共有 8 个。"},{"n":"标记头（红）","c":1,"x":907,"y":794,"w":14,"h":19,"t":"<b>标记头</b>（第 6 个，红色）。"},{"n":"播放头","c":1,"x":935,"y":818,"w":20,"h":16,"t":"<b>播放头</b> —— 概览条上的蓝色小方块，表示当前播放位置落在可见范围的哪一处。"},{"n":"把手（左）","c":1,"x":83,"y":835,"w":12,"h":13,"t":"<b>把手</b>（相当于 mpv 的<b>环</b>）—— 拖它改可见范围的左端。"},{"n":"把手（右）","c":1,"x":1468,"y":836,"w":11,"h":11,"t":"<b>把手</b>（右）—— 拖它改可见范围的右端。"},{"n":"横轴","c":3,"x":95,"y":838,"w":1373,"h":8,"t":"<b>横轴</b> —— 两把手之间的那段，就是当前的<b>可见范围</b>。\nPr 这条<b>完全线性</b>（x = x0 + k·t），mpv 那边是幂律，这是有意偏离。\nPr 侧没有「抓起变白」这一步。"}]};
+const IMG = {mpv:[1680,1005], classic:[1680,1005], pr:[1680,895]};
+const tip = document.getElementById('tip');
+const dbgbox = document.getElementById('dbgbox');
+const dbgout = document.getElementById('dbgout');
+const dbginfo = document.getElementById('dbginfo');
+let DBG = false;
+
+function show(e, txt){
+  if (DBG) return;
+  tip.innerHTML = txt.replace(/\n/g, '<br>');
+  tip.style.display = 'block';
+  const r = tip.getBoundingClientRect();
+  let x = e.clientX + 16, y = e.clientY + 16;
+  if (x + r.width  > innerWidth  - 8) x = e.clientX - r.width  - 16;
+  if (y + r.height > innerHeight - 8) y = e.clientY - r.height - 16;
+  tip.style.left = Math.max(8,x) + 'px';
+  tip.style.top  = Math.max(8,y) + 'px';
+}
+
+function apply(el, h){
+  const d = IMG[el.dataset.view];
+  el.style.left   = (h.x / d[0] * 100) + '%';
+  el.style.top    = (h.y / d[1] * 100) + '%';
+  el.style.width  = (h.w / d[0] * 100) + '%';
+  el.style.height = (h.h / d[1] * 100) + '%';
+}
+function info(view, i){
+  const h = HOT[view][i];
+  return h.n + '　x=' + h.x + '　y=' + h.y + '　w=' + h.w + '　h=' + h.h;
+}
+function bindDrag(el, view, i){
+  el.addEventListener('pointerdown', ev => {
+    if (!DBG) return;
+    const resizing = ev.target && ev.target.classList && ev.target.classList.contains('rz');
+    ev.preventDefault(); ev.stopPropagation();
+    const h = HOT[view][i];
+    const s = {cx: ev.clientX, cy: ev.clientY, ox: h.x, oy: h.y, ow: h.w, oh: h.h};
+    try { el.setPointerCapture(ev.pointerId); } catch(err) {}
+    const onMove = e2 => {
+      const dx = e2.clientX - s.cx, dy = e2.clientY - s.cy;
+      if (resizing){
+        h.w = Math.max(6, Math.round(s.ow + dx));
+        h.h = Math.max(6, Math.round(s.oh + dy));
+      } else {
+        h.x = Math.round(s.ox + dx);
+        h.y = Math.round(s.oy + dy);
+      }
+      apply(el, h);
+      dbginfo.textContent = info(view, i);
+    };
+    const onUp = () => {
+      el.removeEventListener('pointermove', onMove);
+      el.removeEventListener('pointerup', onUp);
+      dbginfo.textContent = info(view, i);
+    };
+    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerup', onUp);
+    dbginfo.textContent = info(view, i);
+  });
+  el.addEventListener('click', ev => {
+    if (DBG){ ev.preventDefault(); ev.stopPropagation(); }
+  });
+}
+
+function build(view){
+  const stage = document.querySelector('#v-' + view + ' .stage');
+  HOT[view].forEach((h, i) => {
+    const d = document.createElement('div');
+    d.className = 'hot c' + h.c + (h.lb ? ' lb' : '');
+    d.dataset.n = h.n;
+    d.dataset.view = view;
+    apply(d, h);
+    const rz = document.createElement('span');
+    rz.className = 'rz';
+    d.appendChild(rz);
+    d.addEventListener('mousemove', e => show(e, h.t));
+    d.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+    bindDrag(d, view, i);
+    stage.appendChild(d);
+  });
+}
+Object.keys(HOT).forEach(build);
+
+function switchTo(v){
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x.dataset.view === v));
+  document.querySelectorAll('.view').forEach(x => x.classList.remove('on'));
+  document.getElementById('v-' + v).classList.add('on');
+}
+document.querySelectorAll('nav button').forEach(b => { b.onclick = () => switchTo(b.dataset.view); });
+document.getElementById('all').onchange = e => document.body.classList.toggle('all', e.target.checked);
+document.getElementById('dbg').onchange = e => {
+  DBG = e.target.checked;
+  document.body.classList.toggle('dbg', DBG);
+  dbgbox.style.display = DBG ? 'block' : 'none';
+  tip.style.display = 'none';
+};
+document.getElementById('export').onclick = () => {
+  const out = {};
+  for (const v of Object.keys(HOT)) out[v] = HOT[v].map(h => ({n:h.n, c:h.c, x:h.x, y:h.y, w:h.w, h:h.h}));
+  dbgout.value = JSON.stringify(out, null, 1);
+  dbgout.style.display = 'block';
+  dbgout.select();
+};
+const sp = new URLSearchParams(location.search);
+if (sp.get('view') && HOT[sp.get('view')]) switchTo(sp.get('view'));
+if (sp.get('dbg')) document.getElementById('dbg').click();
+</script>
+</body>
+</html>
