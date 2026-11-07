@@ -21,6 +21,7 @@
     D             打印最后两个点的 Δx / Δy / 距离
     A             以最后一点的颜色为基准，把视图内**色差超过阈值**的像素圈出来（找偏色）
     [ / ]         阈值 -1 / +1（默认 4，即 max|dR|,|dG|,|dB| > 4 才算偏色）
+    - / =         扫描半径 -2 / +2（默认 10，只扫基准点周围这个方框）
     X             清掉偏色标记
     Esc / Q       退出
 
@@ -62,7 +63,7 @@ class App(object):
         self.status = tk.Label(root, anchor='w', font=('Consolas', 12), bg='#1c1c22', fg='#e8e8ee')
         self.status.pack(fill='x')
         self.help = tk.Label(root, anchor='w', font=('Consolas', 10), bg='#1c1c22', fg='#9aa0aa',
-                             text='左键打点 / 右键撤销 / C 清空 / V 剪贴板 / O 打开 / 滚轮缩放 / 中键平移 / R 复位 / G 网格 / S 存表 / D Δ / A 找偏色 / [ ] 阈值 / X 清除 / Esc 退出')
+                             text='左键打点 / 右键撤销 / C 清空 / V 剪贴板 / O 打开 / 滚轮缩放 / 中键平移 / R 复位 / G 网格 / S 存表 / D Δ / A 找偏色 / [ ] 阈值 / - = 半径 / X 清除 / Esc 退出')
         self.help.pack(fill='x')
 
         self.img = None
@@ -71,6 +72,7 @@ class App(object):
         self.points = []
         self.show_grid = True
         self.thr = 4              # 偏色阈值：max(|dR|,|dG|,|dB|) > thr
+        self.scan_r = 10          # A 键只扫基准点周围 ±scan_r 的方框
         self.marks = []           # 偏色像素（原图坐标）
         self._photo = None
         self._drag = None
@@ -266,6 +268,12 @@ class App(object):
         elif k == 'bracketright':
             self.thr = min(64, self.thr + 1)
             self.set_status('偏色阈值 = %d（按 A 重新扫）' % self.thr)
+        elif k == 'minus':
+            self.scan_r = max(1, self.scan_r - 2)
+            self.set_status('扫描半径 = ±%d px（按 A 重新扫）' % self.scan_r)
+        elif k == 'equal':
+            self.scan_r = min(80, self.scan_r + 2)
+            self.set_status('扫描半径 = ±%d px（按 A 重新扫）' % self.scan_r)
         elif k == 'x':
             self.marks = []
             self.redraw()
@@ -310,12 +318,12 @@ class App(object):
             self.set_status('基准点在图片外')
             return
         ref = self.img.getpixel((rx, ry))
-        cw = max(1, self.canvas.winfo_width())
-        ch = max(1, self.canvas.winfo_height())
-        x0 = max(0, int(-self.ox / self.scale))
-        y0 = max(0, int(-self.oy / self.scale))
-        x1 = min(self.img.width, int((cw - self.ox) / self.scale) + 1)
-        y1 = min(self.img.height, int((ch - self.oy) / self.scale) + 1)
+        # 只在基准点周围半径 R 的方框里扫：全视图扫会把所有"非基准色"的像素都框进来
+        # （背景、环心、另一侧的环），满屏绿框反而看不出东西。
+        x0 = max(0, rx - self.scan_r)
+        y0 = max(0, ry - self.scan_r)
+        x1 = min(self.img.width, rx + self.scan_r + 1)
+        y1 = min(self.img.height, ry + self.scan_r + 1)
         self.marks = []
         for iy in range(y0, y1):
             for ix in range(x0, x1):
@@ -324,14 +332,14 @@ class App(object):
                     self.marks.append((ix, iy))
         self.redraw()
         n = len(self.marks)
-        self.set_status('基准 #%d (%d,%d) RGB=%s  阈值 %d  ⇒  视图内偏色 %d 个像素（共 %d）' % (
-            len(self.points), rx, ry, ref, self.thr, n, (x1 - x0) * (y1 - y0)))
+        self.set_status('基准 #%d (%d,%d) RGB=%s  阈值 %d  范围 ±%dpx  ⇒  偏色 %d 个（共 %d）' % (
+            len(self.points), rx, ry, ref, self.thr, self.scan_r, n, (x1 - x0) * (y1 - y0)))
         if n:
             print('--- 偏色像素（基准 RGB=%s 阈值 %d）---' % (ref, self.thr))
-            for (ix, iy) in self.marks[:60]:
+            for (ix, iy) in self.marks[:24]:
                 print('  x=%d y=%d  RGB=%s' % (ix, iy, self.img.getpixel((ix, iy))))
-            if n > 60:
-                print('  ...还有 %d 个（存表见 S）' % (n - 60))
+            if n > 24:
+                print('  ...还有 %d 个（按 S 存表看全部）' % (n - 24))
 
     def save_points(self):
         if not self.points:
