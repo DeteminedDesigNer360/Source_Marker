@@ -16,7 +16,7 @@
 ## 包里有什么
 
 ```
-source-marker-united-1.2.0-alpha-r46/
+source-marker-united-1.2.0-alpha-r56/
 ├── 快速上手.md              ← 先读这个（从打标记到导入 Pr 的完整流程）
 ├── README.md                本文件
 ├── 改动说明.md              所有改动、取舍与真机验证记录（想看"改了什么、为什么"就看它）
