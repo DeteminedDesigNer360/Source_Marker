@@ -2925,7 +2925,7 @@ local function render_timeline()
         t and string.format('%.3f 吸帧=%s 帧宽=%.1fpx 头x=%.0f', t, fi and tostring(fi) or '关',
             frame_px, cx_pl or -1) or '无',
         row_tc, tc_sz, row_lab, rl_y, row_ov, wx0, wx1, wl, wr,
-        (o.tl_ov_map == 'bar' and TL.bar_k) and TL.bar_k(math.max(0, math.min(1, span / math.max(1e-6, dur)))) or 1,
+        (o.tl_ov_map == 'bar' and TL.bar_k) and TL.bar_k(math.max(0, math.min(1, span / math.max(1e-6, dur))), dur) or 1,
         (o.tl_ov_map == 'bar') and TL.bar_pow(dur) or 1, TL.ov_min_px()))
 end
 
@@ -3262,7 +3262,7 @@ local function tl_ov_time(g, mx, kind, l0, r0)
             return TL.bar_solve(g.dur, g.t0, f, 'right')
         end
         local u = math.max(0, math.min(1, (g.t1 - g.t0) / math.max(1e-6, g.dur)))
-        local k = TL.bar_k(u)
+        local k = TL.bar_k(u, g.dur)
         if k and k > 1e-6 then
             local ct = 0.5 + (f - 0.5) / k        -- 中心映射 xc = 0.5+(c-0.5)*k 的反解
             return math.max(0, math.min(1, ct)) * g.dur
@@ -3302,10 +3302,26 @@ end
 --     用户 m10404 纠正：mpv 的入出点标记是时间轴上那对中括号（AB 循环），概览条是**可见范围滑块**，
 --     功能同构物是滑块 ⇒ 长度本来就该非线性。
 --
--- TL.bar_k：只为兼容旧调用点保留（tl_ov_time / :2915 / :3750 拿它当"bar 模式是否存在"的探针），
---   中心既然线性，放大系数恒为 1。
-TL.bar_k = function(u)
-    return 1
+-- 中心压缩系数 k（r54 / B1，2026-11-07）：Pr 可见范围滑块的中心**不是线性**，而是
+--   xc = 0.5 + (c - 0.5) * k ,   k = (1 - w) / (1 - u)
+-- 这个 k 不是拟合值，是「区间贴片头 ⟺ 条贴轨道左端」「贴片尾 ⟺ 条贴右端」两条件的**同一个解析解**：
+--   t0 = 0    ⇒ c = u/2      ⇒ l = 0.5 - (1-u)k/2 - w/2 = 0 ⇒ k = (1-w)/(1-u)
+--   t1 = dur  ⇒ c = 1 - u/2  ⇒ r = 0.5 + (1-u)k/2 + w/2 = 1 ⇒ 同一个 k
+-- 所以两端**同时**精确贴边，不需要分段、也不需要贴边特判（贴边三支保留只为兜底）。
+-- 数据：30 min 素材四样本（u=0.5 两个不同 c 给 k=0.598/0.600，公式 0.5989；u=0.25 给 0.678/0.680，
+--   公式 0.6801），加上前代 30 s 短片与 60 min 素材五组历史数据，误差全部 <= 0.007。
+--   ⇒ 30 s（p=1.30，w 比 u 窄，k=1.19）与 30 min（p=0.51，w 比 u 宽，k=0.60）方向相反，
+--     但那是同一条公式的两个取值，不是两种现象（r44~r47 的 tl_ov_k=1.19 把它当常数，所以只能靠曲线硬掰）。
+-- 旧签名只有一个 u：算不出 w 就返回 1。现在第二参数 dur 必传（取不到时 bar_pow 会退化 p=1 ⇒ k=1）。
+TL.bar_k = function(u, dur)
+    u = tonumber(u) or 0
+    if u <= 1e-9 then return 1 end
+    if u >= 1 - 1e-9 then return TL.bar_pow(dur) end   -- u -> 1 时的极限是 p（0/0）
+    local w = u ^ TL.bar_pow(dur)
+    if w >= 1 then return 1 end
+    local k = (1 - w) / (1 - u)
+    if not k or k ~= k or k <= 0 then return 1 end
+    return k
 end
 
 -- 宽度幂律的指数 p。rw 取渲染时记下的轨道宽（TL.rw，见 render_timeline / tl_grab_move）。
@@ -3350,7 +3366,7 @@ TL.bar_geom = function(t0, t1, dur)
     if tostring(o.tl_ov_edge or 'pin') == 'pr' then
         -- 连续口径：贴边也用中心公式（靠下面的平移 clamp 收进 0~1），贴边瞬间不会阶跃，
         -- 代价是贴边那一端不再像素级钉死（30 s 片上约 6~21 px 的漂移）
-        local xc = 0.5 + (c - 0.5) * TL.bar_k(u)
+        local xc = 0.5 + (c - 0.5) * TL.bar_k(u, dur)
         l, r = xc - w / 2, xc + w / 2
     elseif at_head and at_tail then
         l, r = 0, 1
@@ -3359,7 +3375,7 @@ TL.bar_geom = function(t0, t1, dur)
     elseif at_tail then
         l, r = 1 - w, 1
     else
-        local xc = 0.5 + (c - 0.5) * TL.bar_k(u)
+        local xc = 0.5 + (c - 0.5) * TL.bar_k(u, dur)
         l, r = xc - w / 2, xc + w / 2
     end
     if l < 0 then r, l = r - l, 0 end
@@ -3459,7 +3475,12 @@ TL.bar_solve_px = function(dur, anchor, target, side, minw, edge)
     elseif (edge == 'tail' and side == 'left') or (side == 'left' and anchor >= 1 - 1e-9) then
         return math.max(0, dur - span), dur
     end
-    local c = (a + b) / 2                    -- 线性化：中心就是两端中点，没有 k>1 的放大
+    -- 中心反解：xc = 0.5 + (c-0.5)k ⇒ c = 0.5 + (xc-0.5)/k（与 TL.bar_geom 的绘制式子必须同源，
+    -- 否则又是 P4 那个「绘制与反解不同源」的老毛病）
+    local kc = TL.bar_k(u, dur)
+    local xc = (a + b) / 2
+    local c = (kc and kc > 1e-6) and (0.5 + (xc - 0.5) / kc) or xc
+    if c < 0 then c = 0 elseif c > 1 then c = 1 end
     local mid = c * dur
     return mid - span / 2, mid + span / 2
 end
@@ -3815,7 +3836,7 @@ local function tl_grab_move(g, mx)
                 if inr and n1 < tph then n1 = math.min(g.dur, math.max(tph, gr.t0 + minspan)) end
             end
         else
-            local k = TL.bar_k(math.max(0, math.min(1, (gr.t1 - gr.t0) / math.max(1e-6, g.dur))))
+            local k = TL.bar_k(math.max(0, math.min(1, (gr.t1 - gr.t0) / math.max(1e-6, g.dur))), g.dur)
             local x0m = ((gr.mx0 or mx) - g.x0) / math.max(1, g.rw)
             local half = (gr.t1 - gr.t0) / 2
             local mid = (((gr.t0 + gr.t1) / 2) / g.dur + (target - x0m) / k) * g.dur
