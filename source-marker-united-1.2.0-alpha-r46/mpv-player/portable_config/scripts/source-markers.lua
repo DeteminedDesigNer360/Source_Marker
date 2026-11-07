@@ -2733,10 +2733,15 @@ local function render_timeline()
     end
     local grk = (TL.grab and TL.grab.kind) or ''      -- 抓取中：对应抓手画亮（r46）
     -- 亮段也画成胶囊：贴到端点时才不会用直角把圆头削掉；两端最终被环盖住（与 Pr 一致）
-    local seg_x = math.floor(wx0) + 1
-    local seg_w = math.max(2 * math.floor(ov_ih / 2), math.floor(wx1) - math.floor(wx0) - 2)
+    -- r56 补三：亮段也改成与**槽同高**（ov_track_h），两端圆头的圆心正好落在环心上（各外延 ov_r）。
+    -- 这样环（环径 = 槽高）完全落在亮段内部，环与亮段之间不存在任何不同色的边界 ——
+    -- 之前亮段只有内层高（比环矮 2 px），环上下各露出 1~2 px 压在槽底色上，
+    -- 16 倍放大后就是用户说的"四个角约 3 px 发黑"（垫圆把暗边从 5 px 压到 3 px，但压不到 0）。
+    -- Pr 的可见范围亮段本来就是与轨道同高的，环整个骑在亮段上。
+    local seg_x = math.floor(wx0) - ov_r
+    local seg_w = math.max(2 * ov_r, math.floor(wx1) - math.floor(wx0) + 2 * ov_r)
     local seg_col = (grk == 'mid') and '&H8A8A8A&' or '&H313131&'
-    lines[#lines + 1] = round_rect_line(seg_x, ov_iy, seg_w, ov_ih, math.max(1, math.floor(ov_ih / 2)),
+    lines[#lines + 1] = round_rect_line(seg_x, ov_mid - ov_r, seg_w, ov_track_h, ov_r,
         seg_col, '00')
     for i, xc in ipairs({ wx0, wx1 }) do
         local hot = (grk == ((i == 1) and 'left' or 'right'))
@@ -3935,6 +3940,9 @@ mp.register_script_message('tl-grab', function(kind, u0)
     TL.grab = { kind = kind, t0 = g.t0, t1 = g.t1, base = tl_ov_time(g, mx0, kind, gl0, gr0), mx0 = mx0,
                 l0 = gl0, r0 = gr0, tph = tph0, p0 = p00 }
     tl_grab_sections(true)
+    -- 抓起后立刻重绘：真机上鼠标按下必然伴随 mouse-pos 事件所以看不出来，
+    -- 但在没有新输入时（取证钩子、暂停且鼠标不动）OSD 不会自己刷新，画面要等到下一次事件才变。
+    if redraw_ui then redraw_ui() end
     msg.verbose('时间轴·抓起（取证）' .. tostring(kind))
 end)
 -- 取证开关：script-message tl-dbg log|file|off（file 写到 ~~/source-markers-dbg.log）
