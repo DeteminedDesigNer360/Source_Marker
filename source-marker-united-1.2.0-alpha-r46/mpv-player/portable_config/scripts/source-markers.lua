@@ -2732,8 +2732,9 @@ local function render_timeline()
     -- 亮段也画成胶囊：贴到端点时才不会用直角把圆头削掉；两端最终被环盖住（与 Pr 一致）
     local seg_x = math.floor(wx0) + 1
     local seg_w = math.max(2 * math.floor(ov_ih / 2), math.floor(wx1) - math.floor(wx0) - 2)
+    local seg_col = (grk == 'mid') and '&H8A8A8A&' or '&H313131&'
     lines[#lines + 1] = round_rect_line(seg_x, ov_iy, seg_w, ov_ih, math.max(1, math.floor(ov_ih / 2)),
-        (grk == 'mid') and '&H8A8A8A&' or '&H313131&', '00')
+        seg_col, '00')
     for i, xc in ipairs({ wx0, wx1 }) do
         local hot = (grk == ((i == 1) and 'left' or 'right'))
         local cx = math.floor(xc)
@@ -2750,8 +2751,12 @@ local function render_timeline()
         -- 而不是加厚：再厚就变实心圆盘，暗心只剩 5 px，反而不像 Pr 的细环。
         local ring = math.max(2, math.floor(cr * 0.42 + 0.5))
         local rr = r - ring
+        -- r55 补：环心填**亮段色**，不是固定的 0x1D1D1D。
+        -- 原来固定深色时，环心比亮段暗一截 ⇒ 亮段上像被挖了两个洞，环与条的接缝在抓取（亮段变浅）时最明显（P5-2）。
+        -- 填亮段色后环就是"亮段上的一圈环"，接缝自然消失。
+        -- 环心始终被环壁包住（rr < r），所以贴端点时也不会有一块亮色漏到槽上（1000×700 实测确认）。
         if rr >= 1 then
-            lines[#lines + 1] = poly_line(cx - rr, ov_mid - rr, rr / 10, '&H1D1D1D&', '00',
+            lines[#lines + 1] = poly_line(cx - rr, ov_mid - rr, rr / 10, seg_col, '00',
                 circle_pts(10, 10, 10, false, 48))
         end
     end
