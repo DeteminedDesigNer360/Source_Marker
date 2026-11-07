@@ -2693,7 +2693,10 @@ local function render_timeline()
     -- P9：槽要**兜住环的外沿**（Pr 实测「槽长 == 最大外沿距」）。环心行程仍是 x0..x0+rw，
     -- 环的视觉半径就是 crv（poly 半径 cr+1 = crv），所以两端各外扩 crv 正好让环外沿落在槽沿上。
     -- 再夹 pad-1：小窗口下 pad 只比 crv 大 1~2 px，不夹的话槽会贴死面板边缘（看不到块的左框）。
-    local ov_ext = math.max(2, math.min(crv, pad - 1))
+    -- r56 补：用户 2026-11-07「槽正好包住环外沿的一点，应该再向外扩 1~2 px，让包裹感更明显」
+    -- ⇒ 外扩量取 crv + 2，再用 pad - 1 夹住（不能贴死面板边缘，否则块的左框会被吃掉）。
+    -- 800p 下 pad = 7 ⇒ 夹到 6，比环外沿多 1 px；1600p 下 pad 更大，可以拿到完整的 +2。
+    local ov_ext = math.max(2, math.min(crv + 2, pad - 1))
     local ov_r = math.max(2, math.floor(ov_track_h / 2))
     lines[#lines + 1] = round_rect_line(x0 - ov_ext, ov_mid - ov_r, rw + 2 * ov_ext, ov_track_h, ov_r, '&H313131&', '00')
     local ov_ih = math.max(2, ov_track_h - 2)                 -- 内层高
@@ -2745,7 +2748,14 @@ local function render_timeline()
         -- 环径取 crv 后：非激活时环比内层高 2 px（顶出 1 px，肩角被环吃掉），
         -- 抓取时尺寸不变、只变纯白（用户 2026-11-07：激活时环心保持不变，只有横轴高亮）。
         local r = crv
-        -- Pr 的抓手只有**两层**（16 倍放大截图逐像素量）：亮环 0x8A8A8A + 中心挖空的暗圆 0x1D1D1D，
+        -- r56 补二：环外面再垫一圈**亮段色**的实心圆（半径 r+1）。
+        -- 环径 = 轨道高，上下各顶出内层 1 px，这 1 px 落在槽外圈（0x313131）上 ——
+        -- 非激活时外圈与亮段同色看不出，**抓取时亮段变 0x8A8A8A 而外圈不变**，
+        -- 于是环的上下肩角又露出一条暗边（用户说的"四个角发黑"，只在激活时明显）。
+        -- 垫圆把这一圈涂成亮段色，缺口彻底消失；槽已经外扩到 crv+2，贴端点时垫圆也在槽内。
+        lines[#lines + 1] = poly_line(cx - r - 1, ov_mid - r - 1, (r + 1) / 10, seg_col, '00',
+            circle_pts(10, 10, 10, false, 48))
+        -- Pr 的抓手只有**两层**（16 倍放大截图逐像素量）：亮环 + 中心挖空的暗圆，
         -- 外面没有描边/发光那一圈（以前多画了一层 0x101010 外发光，放大看是"三层"）。
         -- 抓取/hover 时只把环变纯白，尺寸不变（r56 起）。
         lines[#lines + 1] = poly_line(cx - r, ov_mid - r, r / 10, hot and '&HFFFFFF&' or '&H8A8A8A&', '00',
@@ -3123,7 +3133,7 @@ local function tl_wheel_region(x, y)
     local g = TL.geo
     if not g or not x or not y then return nil end
     -- P9：槽两端各外扩了 crv（视觉半径），滚轮也要认这段，否则最外 2~4 px 是死区
-    local px = 2 + (tonumber(g.cr) or 0)
+    local px = 4 + (tonumber(g.cr) or 0)   -- 槽外扩了 crv+2，容差跟着放宽，最外侧不留死区
     if x < g.x0 - px or x > g.x1 + px then return nil end
     if y >= g.y_ov - 2 and y <= g.y_ov + g.h_ov + 2 then return 'con' end     -- 控制条：缩放
     if y >= g.y_tc - 2 and y <= g.rl_y + 2 then return 'axis' end            -- 刻度/标记/时间码：单帧
