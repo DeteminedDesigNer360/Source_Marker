@@ -2690,11 +2690,15 @@ local function render_timeline()
     -- Pr 的构造（用户 16x 截图）：**胶囊轮廓** —— 上下各 1 px 亮线 + 两端半圆，内部再填深色。
     -- 做法：先铺一整块"亮线色"的胶囊，再盖一层内缩 1 px 的轨道色胶囊，留下的就是那 1 px 轮廓。
     -- 环在端点时半径与胶囊圆头相同，正好把半圆盖住（Pr 的效果）。
+    -- P9：槽要**兜住环的外沿**（Pr 实测「槽长 == 最大外沿距」）。环心行程仍是 x0..x0+rw，
+    -- 环的视觉半径就是 crv（poly 半径 cr+1 = crv），所以两端各外扩 crv 正好让环外沿落在槽沿上。
+    -- 再夹 pad-1：小窗口下 pad 只比 crv 大 1~2 px，不夹的话槽会贴死面板边缘（看不到块的左框）。
+    local ov_ext = math.max(2, math.min(crv, pad - 1))
     local ov_r = math.max(2, math.floor(ov_track_h / 2))
-    lines[#lines + 1] = round_rect_line(x0, ov_mid - ov_r, rw, ov_track_h, ov_r, '&H313131&', '00')
+    lines[#lines + 1] = round_rect_line(x0 - ov_ext, ov_mid - ov_r, rw + 2 * ov_ext, ov_track_h, ov_r, '&H313131&', '00')
     local ov_ih = math.max(2, ov_track_h - 2)                 -- 内层高
     local ov_iy = ov_mid - ov_r + 1                          -- 内层顶
-    lines[#lines + 1] = round_rect_line(x0 + 1, ov_iy, rw - 2, ov_ih, math.max(1, ov_r - 1), '&H141414&', '00')
+    lines[#lines + 1] = round_rect_line(x0 - ov_ext + 1, ov_iy, rw + 2 * ov_ext - 2, ov_ih, math.max(1, ov_r - 1), '&H141414&', '00')
     local function ov_frac(f)
         f = math.max(0, math.min(1, f))
         local mode = o.tl_ov_map or 'linear'
@@ -3108,7 +3112,9 @@ end
 local function tl_wheel_region(x, y)
     local g = TL.geo
     if not g or not x or not y then return nil end
-    if x < g.x0 - 2 or x > g.x1 + 2 then return nil end
+    -- P9：槽两端各外扩了 crv（视觉半径），滚轮也要认这段，否则最外 2~4 px 是死区
+    local px = 2 + (tonumber(g.cr) or 0)
+    if x < g.x0 - px or x > g.x1 + px then return nil end
     if y >= g.y_ov - 2 and y <= g.y_ov + g.h_ov + 2 then return 'con' end     -- 控制条：缩放
     if y >= g.y_tc - 2 and y <= g.rl_y + 2 then return 'axis' end            -- 刻度/标记/时间码：单帧
     return nil
@@ -3687,15 +3693,13 @@ local function tl_grab_move(g, mx)
                 -- 之后再也不重试 ⇒ 用户看到“有概率不进入双动”（0~15@4 抓右圆几乎必现）。
                 local sp_cur = math.min(g.t1 - g.t0, hi)
                 if sp_cur >= minspan - 1e-9 then
-                    local gl2, gr2 = TL.bar_geom(tph - sp_cur / 2, tph + sp_cur / 2, g.dur)
-                    gr.sym_off = target - ((gr.kind == 'left') and gl2 or gr2)
                     gr.sym_ready = true
                     gr.sym_sp0, gr.sym_mx0, gr.edge_lock = sp_cur, target, nil
                     gr.sym_l0, gr.sym_r0 = tph - sp_cur / 2, tph + sp_cur / 2
                     sym = sp_cur
                 else
                     -- 保留 nil 让它下一帧继续重试；这里不能动 l0/r0，否则单动拖动会把锚点带着走
-                    gr.sym_ready, gr.sym_off = nil, nil
+                    gr.sym_ready = nil
                 end
             elseif gr.sym_ready then
                 -- 相对缩放：跨度按**鼠标位移**线性变化（不用"鼠标绝对位置 → 跨度"的幂律，小跨度时太敏感；
@@ -3734,12 +3738,12 @@ local function tl_grab_move(g, mx)
             -- 而 sym_block 为真时上面那个 if 必然为假 ⇒ 同一帧就进这里把锁清掉 ⇒
             -- 下一帧又重进同动 → 触界 → 解锁 → 再进同动，区间卡在 "hi" 上永远出不来
             -- （0~15@7.5 抓右圆放大、对称放大到片头触底后继续拖，都是这个死循环）。
-            gr.sym_ready, gr.sym_off, gr.sym_block = nil, nil, nil
+            gr.sym_ready, gr.sym_block = nil, nil
             gr.sym_sp0, gr.sym_mx0, gr.edge_lock = nil, nil, nil
             gr.sym_l0, gr.sym_r0 = nil, nil
         end
         gr.sym = (sym ~= nil)
-        if sym then gr.mx_off = nil end                   -- 回到对称：偏移交给 gr.sym_off，别两边都算
+        if sym then gr.mx_off = nil end                   -- 回到对称：偏移只在单动段用，对称段按相对位移重算
         -- tl_ov_pin='px'：抓哪端，另一端就钉在抓起那一刻的像素上（Pr 实测口径），时间随之微调
         local pinpx = TL.bar_solve_px and feel ~= 'pr' and tostring(o.tl_ov_pin or 'px') == 'px' and gr.l0 and gr.r0
         -- Pr 口径：缩小只允许让播放头朝中点靠近。若抓的这一端会让播放头远离中点（上面判的 illegal），
@@ -3847,11 +3851,11 @@ local function tl_grab_move(g, mx)
         -- 取证：每帧一行，关键判定全带上（tl_dbg=log 走 mpv 日志 / file 追加到 home 下 txt）
         if dbg ~= 'off' then
             local s = string.format(
-                'tlgrab k=%s ke=%s tr=%s sym=%s sr=%s blk=%s inr=%s pn=%s mx=%.1f tg=%.4f te=%.4f l0=%s r0=%s mxo=%s soff=%s pa=%s pb=%s n=%.3f,%.3f',
+                'tlgrab k=%s ke=%s tr=%s sym=%s sr=%s blk=%s inr=%s pn=%s mx=%.1f tg=%.4f te=%.4f l0=%s r0=%s mxo=%s pa=%s pb=%s n=%.3f,%.3f',
                 tostring(gr.kind), tostring(kind_eff), tostring(gr.trans), tostring(sym ~= nil), tostring(gr.sym_ready),
                 tostring(gr.sym_block), tostring(inr), pn and string.format('%.4f', pn) or 'nil', mx, target, target_eff,
                 gr.l0 and string.format('%.4f', gr.l0) or 'nil', gr.r0 and string.format('%.4f', gr.r0) or 'nil',
-                gr.mx_off and string.format('%.4f', gr.mx_off) or 'nil', gr.sym_off and string.format('%.4f', gr.sym_off) or 'nil',
+                gr.mx_off and string.format('%.4f', gr.mx_off) or 'nil',
                 pa and string.format('%.3f', pa) or 'nil', pb and string.format('%.3f', pb) or 'nil', n0, n1)
             if dbg == 'file' and TL.dbg_file then
                 TL.dbg_file:write(s .. '\n'); TL.dbg_file:flush()

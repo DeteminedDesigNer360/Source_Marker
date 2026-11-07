@@ -12,7 +12,7 @@ import sys
 import argparse
 
 FIELDS = ('k', 'ke', 'tr', 'sym', 'sr', 'blk', 'inr', 'pn', 'mx', 'tg', 'te',
-          'l0', 'r0', 'mxo', 'soff', 'pa', 'pb')
+          'l0', 'r0', 'mxo', 'pa', 'pb')
 
 
 def parse_line(line):
@@ -85,7 +85,7 @@ def segments(rows):
 
 
 def fmt(r):
-    keys = ['k', 'ke', 'tr', 'sym', 'sr', 'blk', 'pn', 'tg', 'te', 'l0', 'r0', 'mxo', 'soff', 'pa', 'pb']
+    keys = ['k', 'ke', 'tr', 'sym', 'sr', 'blk', 'pn', 'tg', 'te', 'l0', 'r0', 'mxo', 'pa', 'pb']
     head = ' '.join('%s=%s' % (k, r.get(k, '-')) for k in keys)
     return 'n=%.3f,%.3f %s' % (r['n0'], r['n1'], head)
 
@@ -161,7 +161,7 @@ def main():
 
     if args.csv:
         keys = ['line', 'k', 'ke', 'tr', 'sym', 'sr', 'blk', 'inr', 'pn', 'mx', 'tg', 'te',
-                'l0', 'r0', 'mxo', 'soff', 'pa', 'pb', 'n0', 'n1']
+                'l0', 'r0', 'mxo', 'pa', 'pb', 'n0', 'n1']
         with io.open(args.csv, 'w', encoding='utf-8', newline='') as f:
             f.write(','.join(keys) + '\n')
             for r in frames:
