@@ -2758,13 +2758,20 @@ local function render_timeline()
         -- 非激活时外圈与亮段同色看不出，**抓取时亮段变 0x8A8A8A 而外圈不变**，
         -- 于是环的上下肩角又露出一条暗边（用户说的"四个角发黑"，只在激活时明显）。
         -- 垫圆把这一圈涂成亮段色，缺口彻底消失；槽已经外扩到 crv+2，贴端点时垫圆也在槽内。
-        lines[#lines + 1] = poly_line(cx - r - 1, ov_mid - r - 1, (r + 1) / 10, seg_col, '00',
-            circle_pts(10, 10, 10, false, 48))
-        -- Pr 的抓手只有**两层**（16 倍放大截图逐像素量）：亮环 + 中心挖空的暗圆，
-        -- 外面没有描边/发光那一圈（以前多画了一层 0x101010 外发光，放大看是"三层"）。
-        -- 抓取/hover 时只把环变纯白，尺寸不变（r56 起）。
-        lines[#lines + 1] = poly_line(cx - r, ov_mid - r, r / 10, hot and '&HFFFFFF&' or '&H8A8A8A&', '00',
-            circle_pts(10, 10, 10, false, 48))
+        -- r56 补四：环壁与亮段**同色时整层不画**。
+        -- 抓中间时 ring_col == seg_col（都是 0x8A8A8A），画上去看不见，却会在圆的外沿
+        -- 多叠一层抗锯齿 —— 四次 alpha 混合之后，45° 方向的四个斜角最糊（每行只盖住 0.7 px，
+        -- 抗锯齿成分最大）。跳过同色层后画面只剩「亮段 + 环心」，斜角干净。
+        local ring_col = hot and '&HFFFFFF&' or '&H8A8A8A&'
+        if ring_col ~= seg_col then
+            lines[#lines + 1] = poly_line(cx - r - 1, ov_mid - r - 1, (r + 1) / 10, seg_col, '00',
+                circle_pts(10, 10, 10, false, 48))
+            -- Pr 的抓手只有**两层**（16 倍放大截图逐像素量）：亮环 + 中心挖空的暗圆，
+            -- 外面没有描边/发光那一圈（以前多画了一层 0x101010 外发光，放大看是"三层"）。
+            -- 抓取/hover 时只把环变纯白，尺寸不变（r56 起）。
+            lines[#lines + 1] = poly_line(cx - r, ov_mid - r, r / 10, ring_col, '00',
+                circle_pts(10, 10, 10, false, 48))
+        end
         -- 环厚：Pr 的"亮环 : 暗心"略大于 4:6 ⇒ 两边加起来约 5~6 px（直径 14 px 时 = 单边 3）。
         -- 用户反馈"亮度差大、放大看轮廓发毛" —— 处理方式是**加密多边形**（48 段，见上面的 circle_pts），
         -- 而不是加厚：再厚就变实心圆盘，暗心只剩 5 px，反而不像 Pr 的细环。

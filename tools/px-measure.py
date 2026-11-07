@@ -19,6 +19,9 @@
     G             切换像素网格
     S             点表存成 <图片名>.points.csv，并在终端打印
     D             打印最后两个点的 Δx / Δy / 距离
+    A             以最后一点的颜色为基准，把视图内**色差超过阈值**的像素圈出来（找偏色）
+    [ / ]         阈值 -1 / +1（默认 4，即 max|dR|,|dG|,|dB| > 4 才算偏色）
+    X             清掉偏色标记
     Esc / Q       退出
 
 读数说明：状态栏坐标一律是**原图像素**（和截图里的像素一一对应）；Δ 是相对"上一个点"的位移。
@@ -38,6 +41,7 @@ ZOOM_MIN, ZOOM_MAX = 0.2, 16.0
 COL_PT = '#ff2d55'
 COL_LINE = '#ffd400'
 COL_GRID = '#3a3a46'
+COL_MARK = '#33ff99'
 
 
 def img_to_view(ix, iy, scale, ox, oy):
@@ -58,7 +62,7 @@ class App(object):
         self.status = tk.Label(root, anchor='w', font=('Consolas', 12), bg='#1c1c22', fg='#e8e8ee')
         self.status.pack(fill='x')
         self.help = tk.Label(root, anchor='w', font=('Consolas', 10), bg='#1c1c22', fg='#9aa0aa',
-                             text='左键打点 / 右键撤销 / C 清空 / V 剪贴板 / O 打开 / 滚轮缩放 / 中键平移 / R 复位 / G 网格 / S 存表 / D Δ / Esc 退出')
+                             text='左键打点 / 右键撤销 / C 清空 / V 剪贴板 / O 打开 / 滚轮缩放 / 中键平移 / R 复位 / G 网格 / S 存表 / D Δ / A 找偏色 / [ ] 阈值 / X 清除 / Esc 退出')
         self.help.pack(fill='x')
 
         self.img = None
@@ -66,6 +70,8 @@ class App(object):
         self.ox = self.oy = 0.0
         self.points = []
         self.show_grid = True
+        self.thr = 4              # 偏色阈值：max(|dR|,|dG|,|dB|) > thr
+        self.marks = []           # 偏色像素（原图坐标）
         self._photo = None
         self._drag = None
         self._cursor = (0, 0)
@@ -150,6 +156,15 @@ class App(object):
                 _, vy = img_to_view(0, iy, self.scale, self.ox, self.oy)
                 self.canvas.create_line(px, vy, px + tw, vy, fill=COL_GRID)
 
+        if self.marks:
+            for (ix, iy) in self.marks:
+                if x0 <= ix < x1 and y0 <= iy < y1:
+                    mx, my = img_to_view(ix, iy, self.scale, self.ox, self.oy)
+                    ms = max(6.0, self.scale)
+                    self.canvas.create_rectangle(mx - (ms - self.scale) / 2, my - (ms - self.scale) / 2,
+                                                 mx + ms - (ms - self.scale) / 2, my + ms - (ms - self.scale) / 2,
+                                                 outline=COL_MARK, width=1)
+
         prev = None
         for i, (ix, iy) in enumerate(self.points, start=1):
             vx, vy = img_to_view(ix + 0.5, iy + 0.5, self.scale, self.ox, self.oy)
@@ -187,6 +202,11 @@ class App(object):
         self.points.append((int(round(ix)), int(round(iy))))
         self.redraw()
         self.print_last_pair()
+        rgb = self.img.getpixel(self.points[-1]) if (0 <= self.points[-1][0] < self.img.width and
+                                                     0 <= self.points[-1][1] < self.img.height) else None
+        if rgb:
+            self.set_status('#%d (%d,%d) RGB=%s  —— 按 A 以这个颜色为基准找偏色' % (
+                len(self.points), self.points[-1][0], self.points[-1][1], rgb))
 
     def on_undo(self, ev=None):
         if self.points:
@@ -238,6 +258,18 @@ class App(object):
         elif k == 'g':
             self.show_grid = not self.show_grid
             self.redraw()
+        elif k == 'a':
+            self.scan_outliers()
+        elif k == 'bracketleft':
+            self.thr = max(0, self.thr - 1)
+            self.set_status('偏色阈值 = %d（按 A 重新扫）' % self.thr)
+        elif k == 'bracketright':
+            self.thr = min(64, self.thr + 1)
+            self.set_status('偏色阈值 = %d（按 A 重新扫）' % self.thr)
+        elif k == 'x':
+            self.marks = []
+            self.redraw()
+            self.set_status('已清掉偏色标记')
         elif k == 's':
             self.save_points()
         elif k == 'd':
@@ -265,6 +297,41 @@ class App(object):
             len(self.points) - 1, x1, y1, len(self.points), x2, y2, dx, dy, dist))
         if verbose:
             print('Δx=%+d Δy=%+d 距离=%.1f px' % (dx, dy, dist))
+
+    def scan_outliers(self):
+        """以最后一点的颜色为基准，把视图内色差 > thr 的像素标出来。"""
+        if not self.img:
+            return
+        if not self.points:
+            self.set_status('先左键点一个「正常颜色」的像素，再按 A')
+            return
+        rx, ry = self.points[-1]
+        if not (0 <= rx < self.img.width and 0 <= ry < self.img.height):
+            self.set_status('基准点在图片外')
+            return
+        ref = self.img.getpixel((rx, ry))
+        cw = max(1, self.canvas.winfo_width())
+        ch = max(1, self.canvas.winfo_height())
+        x0 = max(0, int(-self.ox / self.scale))
+        y0 = max(0, int(-self.oy / self.scale))
+        x1 = min(self.img.width, int((cw - self.ox) / self.scale) + 1)
+        y1 = min(self.img.height, int((ch - self.oy) / self.scale) + 1)
+        self.marks = []
+        for iy in range(y0, y1):
+            for ix in range(x0, x1):
+                c = self.img.getpixel((ix, iy))
+                if max(abs(c[0] - ref[0]), abs(c[1] - ref[1]), abs(c[2] - ref[2])) > self.thr:
+                    self.marks.append((ix, iy))
+        self.redraw()
+        n = len(self.marks)
+        self.set_status('基准 #%d (%d,%d) RGB=%s  阈值 %d  ⇒  视图内偏色 %d 个像素（共 %d）' % (
+            len(self.points), rx, ry, ref, self.thr, n, (x1 - x0) * (y1 - y0)))
+        if n:
+            print('--- 偏色像素（基准 RGB=%s 阈值 %d）---' % (ref, self.thr))
+            for (ix, iy) in self.marks[:60]:
+                print('  x=%d y=%d  RGB=%s' % (ix, iy, self.img.getpixel((ix, iy))))
+            if n > 60:
+                print('  ...还有 %d 个（存表见 S）' % (n - 60))
 
     def save_points(self):
         if not self.points:
@@ -301,7 +368,12 @@ def selftest():
     assert view_to_img(img_to_view(3, 4, 0.5, 11, 13)[0], img_to_view(3, 4, 0.5, 11, 13)[1], 0.5, 11, 13) == (3, 4)
     img = Image.new('RGB', (40, 30), (7, 8, 9))
     assert img.getpixel((0, 0)) == (7, 8, 9)
-    print('selftest OK（坐标换算 / PIL / 图片读写都正常）')
+    # 偏色判定
+    ref = (49, 49, 49)
+    assert max(abs(c - r) for c, r in zip((52, 49, 49), ref)) == 3
+    assert not (max(abs(c - r) for c, r in zip((52, 49, 49), ref)) > 4)
+    assert max(abs(c - r) for c, r in zip((60, 49, 49), ref)) > 4
+    print('selftest OK（坐标换算 / PIL / 图片读写 / 偏色判定都正常）')
 
 
 def main():
