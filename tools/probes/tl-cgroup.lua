@@ -30,6 +30,8 @@ local S = {
     ['12'] = { t0 = 17, t1 = 21, ph = 20, kind = 'right', u0 = 0.68879, abs = true, xa = 839, dx = 10, n = 60 },
     ['13'] = { t0 = 5, t1 = 6.6683, ph = 20, kind = 'right', u0 = 0.20755, abs = true, xa = 331, dx = 10, n = 90 },
     ['14'] = { t0 = 25, t1 = 30, ph = 20, kind = 'right', u0 = 1.0, abs = true, xa = 1167, dx = 10, n = 40 },
+    -- P13 回归：30 min 素材、播放头 5 min、从全片抓右环一路缩小到最小档
+    ['15'] = { t0 = 0, t1 = 1800, ph = 300, kind = 'right', u0 = 1.0, abs = true, xa = 1167, dx = -8, n = 90 },
 }
 local sc = S[o.scene]
 if not sc then mp.msg.error('tl-cgroup: unknown scene ' .. tostring(o.scene)) return end

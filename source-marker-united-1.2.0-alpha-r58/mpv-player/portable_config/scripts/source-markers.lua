@@ -3723,27 +3723,30 @@ local function tl_grab_move(g, mx)
         -- 像素中心固定之后，区间中心 ≠ 播放头，pn 必然偏离 0.5 ⇒ 若还按 pn 判，第二帧就掉回单动。
         if gr.kind ~= 'mid' and (in_win or gr.sym_ready) and not gr.sym_block and TL.bar_solve_center then
             local hi = math.min(2 * tph, 2 * (g.dur - tph))
-            -- 同动段：**像素中心固定 + 宽度线性**（P13，2026-11-08）。
-            -- Pr 实测口径：拖环时宽度变化恒 2 × 鼠标位移、两端 0.5/0.5 对称、像素中心不动
-            -- （q/w/v/u/x 五组零例外）。所以这里同时锁两件事：
+            -- 同动段：**区间中心（时间）固定 + 宽度线性**（P13 修正，2026-11-08）。
+            -- Pr 实测：宽度变化恒 2 × 鼠标位移、区间中心不动（q/w/v/u/x 五组零例外）。
+            -- 但 Pr 的时间轴是线性映射，那里「两端像素对称」与「时间中心不动」是同一件事；
+            -- mpv 的概览条是幂律（k=(1−w)/(1−u) 随宽度变），两者只能取一个。
+            -- 取时间中心：用户报的 bug 正是「不以区间中心为轴」——上一版锁像素中心，
+            -- 30 min 素材从全片缩到最小档时中心从 298 漂到 461，公式验算 460.0 与实测吻合。
+            -- 代价：两端像素速度不等（同一趟拖动左环约走 326 px、右环约 154 px，鼠标 240 px）。
             --   ① 宽度每帧从起手基准线性推进：w = w0 + 2·(target − mx0)；
-            --   ② 中心的**像素位置** xc0 固定，不跟 k(u) 走 —— bar_geom 的 xc = 0.5+(c−0.5)k(u)，
-            --      若让 c 恒等于 tph/dur，u 一变 k 就变、中心就漂（实测右环 1:1 但左环只走一半，
-            --      总宽度变化 1.5× 鼠标而不是 Pr 的 2×）。
+            --   ② 中心是**时间**量 gr.sym_mid，起手时定死，整个同动段不再变。
             -- 旧实现按**时间**推（d = Δtarget·C·dur 秒）：固定时间增量换来的宽度变化是
             -- p·u^(p−1)·Δu，u→0 时发散、u→1 时收缩，同一趟拖动里环速 6.92× 掉到 0.80×，
             -- 就是用户报的「弹弓感」（P13 / P12）。
             if gr.sym_ready == nil then
-                local sp_cur = math.min(g.t1 - g.t0, hi)
+                -- 轴心 = **当前区间的实际中心**（不是播放头）：播放头在区间外时进同动也能定死一个正确的轴。
+                local c0 = (g.t0 + g.t1) / 2 / g.dur
+                local hi_eff = 2 * math.min(c0 * g.dur, g.dur - c0 * g.dur)
+                local sp_cur = math.min(g.t1 - g.t0, hi_eff)
                 if sp_cur >= minspan - 1e-9 then
-                    local u0 = sp_cur / g.dur
-                    local pw0 = TL.bar_pow(g.dur)
                     gr.sym_ready = true
                     gr.sym_sp0, gr.sym_mx0 = sp_cur, target
-                    gr.sym_w0 = u0 ^ pw0
-                    gr.sym_xc0 = 0.5 + (tph / g.dur - 0.5) * TL.bar_k(u0, g.dur)
-                    gr.sym_mid = tph
-                    gr.sym_prev = { tph - sp_cur / 2, tph + sp_cur / 2 }
+                    gr.sym_w0 = (sp_cur / g.dur) ^ TL.bar_pow(g.dur)
+                    gr.sym_c0, gr.sym_hi = c0, hi_eff
+                    gr.sym_mid = c0 * g.dur
+                    gr.sym_prev = { gr.sym_mid - sp_cur / 2, gr.sym_mid + sp_cur / 2 }
                     sym = sp_cur
                 else
                     -- 保留 nil 让它下一帧继续重试；这里不能动 l0/r0，否则单动拖动会把锚点带着走
@@ -3752,31 +3755,21 @@ local function tl_grab_move(g, mx)
             elseif gr.sym_ready then
                 local pw = TL.bar_pow(g.dur)
                 local umin = math.max(minspan / g.dur, 1e-9)
-                local umax = math.max(umin, math.min(1, hi / g.dur))
+                local umax = math.max(umin, math.min(1, (gr.sym_hi or g.dur) / g.dur))
                 local w = (gr.sym_w0 or 0) + 2 * (target - (gr.sym_mx0 or target))
                 local wmin, wmax = umin ^ pw, umax ^ pw
                 if w > wmax then w = wmax elseif w < wmin then w = wmin end
                 local u = (pw ~= 1) and (w ^ (1 / pw)) or w
-                -- 由固定像素中心与宽度反解区间中心（与 bar_solve_px 的式子同源）
-                local kk = TL.bar_k(u, g.dur)
-                local c = 0.5 + ((gr.sym_xc0 or 0.5) - 0.5) / math.max(1e-6, kk)
-                c = math.max(0, math.min(1, c))
                 local sp = u * g.dur
-                local mid = c * g.dur
+                local mid = gr.sym_mid or tph
                 if mid - sp / 2 < -1e-9 or mid + sp / 2 > g.dur + 1e-9 then
-                    -- 撞到片头/片尾：整段停住（Pr 实测口径），沿用上一帧的位置
+                    -- 撞到片头/片尾：整段停住（Pr 实测口径），沿用上一帧的跨度
                     local pv = gr.sym_prev
-                    if pv then
-                        gr.sym_mid = (pv[1] + pv[2]) / 2
-                        sym = pv[2] - pv[1]
-                    else
-                        sym = gr.sym_sp0
-                    end
+                    sym = pv and (pv[2] - pv[1]) or gr.sym_sp0
                 else
-                    gr.sym_mid = mid
                     sym = sp
                 end
-                gr.sym_prev = { gr.sym_mid - sym / 2, gr.sym_mid + sym / 2 }
+                gr.sym_prev = { mid - sym / 2, mid + sym / 2 }
             end
         elseif gr.sym_block and not in_win then
             -- 只有播放头**真正离开** p=0.5 的窗口才解锁。以前这里是无条件 else 分支，
@@ -3784,7 +3777,7 @@ local function tl_grab_move(g, mx)
             -- 下一帧又重进同动 → 触界 → 解锁 → 再进同动，区间卡在 "hi" 上永远出不来
             -- （0~15@7.5 抓右圆放大、对称放大到片头触底后继续拖，都是这个死循环）。
             gr.sym_ready, gr.sym_block = nil, nil
-            gr.sym_sp0, gr.sym_mx0, gr.sym_w0, gr.sym_xc0, gr.sym_mid, gr.sym_prev = nil, nil, nil, nil, nil, nil
+            gr.sym_sp0, gr.sym_mx0, gr.sym_w0, gr.sym_c0, gr.sym_hi, gr.sym_mid, gr.sym_prev = nil, nil, nil, nil, nil, nil, nil
         end
         gr.sym = (sym ~= nil)
         if sym then gr.mx_off = nil end                   -- 回到对称：偏移只在单动段用，对称段按相对位移重算
@@ -3856,9 +3849,9 @@ local function tl_grab_move(g, mx)
             end
         end
         if sym then
-            -- 同动只有一个落位：以**像素中心** gr.sym_mid 对称。
-            -- 不是 tph：bar_geom 的中心带 k(u)，宽度一变中心就漂，用 tph 会让左环只走一半（P13）。
-            -- 撞边时 gr.sym_mid/sym 都沿用上一帧 ⇒ 整段停住，不再平移贴边。
+            -- 同动只有一个落位：以**时间中心** gr.sym_mid 对称（P13 修正，2026-11-08）。
+            -- 幂律下「两端像素对称」与「区间中心不动」不能兼得，这里取后者 —— Pr 的轴心语义
+            -- 就是区间中心，像素对称只是它线性映射的副产品。撞边时 sym 沿用上一帧 ⇒ 整段停住。
             local mid = gr.sym_mid or tph
             n0, n1 = mid - sym / 2, mid + sym / 2
         elseif pa then
