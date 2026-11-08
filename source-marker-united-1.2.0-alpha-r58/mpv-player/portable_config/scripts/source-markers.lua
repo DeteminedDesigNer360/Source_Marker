@@ -3730,7 +3730,7 @@ local function tl_grab_move(g, mx)
             -- 取时间中心：用户报的 bug 正是「不以区间中心为轴」——上一版锁像素中心，
             -- 30 min 素材从全片缩到最小档时中心从 298 漂到 461，公式验算 460.0 与实测吻合。
             -- 代价：两端像素速度不等（同一趟拖动左环约走 326 px、右环约 154 px，鼠标 240 px）。
-            --   ① 宽度每帧从起手基准线性推进：w = w0 + 2·(target − mx0)；
+            --   ① 宽度每帧从起手基准线性推进：w = w0 + 2·dir·(target − mx0)，dir 抓左端为 −1；
             --   ② 中心是**时间**量 gr.sym_mid，起手时定死，整个同动段不再变。
             -- 旧实现按**时间**推（d = Δtarget·C·dur 秒）：固定时间增量换来的宽度变化是
             -- p·u^(p−1)·Δu，u→0 时发散、u→1 时收缩，同一趟拖动里环速 6.92× 掉到 0.80×，
@@ -3758,7 +3758,11 @@ local function tl_grab_move(g, mx)
                 local pw = TL.bar_pow(g.dur)
                 local umin = math.max(minspan / g.dur, 1e-9)
                 local umax = math.max(umin, math.min(1, (gr.sym_hi or g.dur) / g.dur))
-                local w = (gr.sym_w0 or 0) + 2 * (target - (gr.sym_mx0 or target))
+                -- 方向符号：抓右端时「鼠标右移 = 变宽」，抓左端时「鼠标左移 = 变宽」。
+                -- 缺了它，抓左端向外的每一帧都在缩窄，到 wmin 就被钳死 ⇒ 最小档抓起左环
+                -- 往外拖「没有任何效果」（30 min 素材播放头 @5:00 实测：整趟拖动区间零变化）。
+                local sym_dir = (gr.kind == 'left') and -1 or 1
+                local w = (gr.sym_w0 or 0) + 2 * sym_dir * (target - (gr.sym_mx0 or target))
                 local wmin, wmax = umin ^ pw, umax ^ pw
                 if w > wmax then w = wmax elseif w < wmin then w = wmin end
                 local u = (pw ~= 1) and (w ^ (1 / pw)) or w
