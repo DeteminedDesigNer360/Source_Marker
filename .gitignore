@@ -37,3 +37,5 @@ reference/*.png
 # mpv 探针跑完会在素材旁边留下这些运行时文件（不是源码）
 reference/*.mpv-autosave.json
 reference/标尺素材-*
+__pycache__/
+*.pyc
