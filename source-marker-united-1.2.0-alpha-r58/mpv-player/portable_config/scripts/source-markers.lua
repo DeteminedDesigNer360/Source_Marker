@@ -3852,13 +3852,24 @@ local function tl_grab_move(g, mx)
             -- 现在原样交给 downstream 的 max(0,·)/min(dur,·) 钳制 —— 贴边后另一端继续跟手。
             -- 只剩「跨度不足最小跨度」这一种情况退回老分支。
             if pa and not (pb - pa >= minspan - 1e-9) then pa = nil end
-            -- 触边取消：**被抓的那一端自己**贴住它那一侧的轨道端点，鼠标还在继续往轨道外推
-            -- ⇒ 这次拖动到此为止（放下环），而不是把区间按在原地。
-            -- 判据必须用「被抓端」而不是「任一端」：同动撞上限时贴边的是另一端，
-            -- 那种情况走上面的「转单动」，不能取消。
+            -- 触边取消：**被抓的那一端自己**顶住它那一侧的轨道端点之后，鼠标再往外推，
+            -- 才结束这次拖动（放下环）。判据必须用「被抓端」而不是「任一端」——
+            -- 同动撞上限时贴边的是另一端，那种情况走上面的「转单动」，不能取消。
+            --
+            -- 为什么要求「上一帧就已经贴住」（gr.edge_pin）：端点越过片尾的那一帧，
+            -- 鼠标往往刚好也越过轨道右端（两端由同一个中心式同步移动），只判同一帧的话
+            -- 就成了「鼠标一移出轨道就取消」，而不是「顶到端点之后再推才取消」。
+            -- 实测判别：区间 2000~3400（l0=0.3435）抓右端，鼠标只越界 2 px、pb 才 3621.3（超出片尾 11 s）
+            -- 就取消了；改成「贴住之后再推」会多走一帧，落位先停在片尾，手感才对得上。
             if pb then
-                if gr.kind == 'right' and pb >= g.dur - 1e-9 and target > 1 + 1e-9 then edge_out = true end
-                if gr.kind == 'left' and pa and pa <= 1e-9 and target < -1e-9 then edge_out = true end
+                local at_end = (gr.kind == 'right' and pb >= g.dur - 1e-9)
+                    or (gr.kind == 'left' and pa and pa <= 1e-9)
+                if at_end then
+                    if gr.edge_pin and target > (gr.edge_tg or target) + 1e-6 then edge_out = true end
+                    gr.edge_pin, gr.edge_tg = true, target
+                else
+                    gr.edge_pin, gr.edge_tg = nil, nil
+                end
             end
         end
         if gr.sym_fall then
@@ -3869,6 +3880,18 @@ local function tl_grab_move(g, mx)
             return
         end
         if edge_out then
+            -- 取证：取消那一帧把鼠标位置与端点位置都打出来（返回到上面之前，正常帧的日志不会走到这里）
+            if dbg ~= 'off' then
+                local s = string.format('tlgrab EDGE_OUT k=%s mx=%.1f tg=%.4f pa=%s pb=%s rw=%.1f dur=%.3f',
+                    tostring(gr.kind), mx, target,
+                    pa and string.format('%.3f', pa) or 'nil', pb and string.format('%.3f', pb) or 'nil',
+                    g.rw or 0, g.dur or 0)
+                if dbg == 'file' and TL.dbg_file then
+                    TL.dbg_file:write(s .. '\n'); TL.dbg_file:flush()
+                else
+                    mp.msg.info(s)
+                end
+            end
             gr.mx_prev, gr.pn_prev = mx, pn
             TL.drop('触边外拖')
             return
