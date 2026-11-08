@@ -2608,7 +2608,13 @@ local function tl_metrics()
     -- 所以 ov_h 和轨道高都按视觉半径算（以前按 7*s 算，圆比轨道高一半，超出轨道的部分点不到）。
     -- 视觉半径 = poly 半径 + 1（外圈）；轨道高 = 2*crv 才能和圆上下沿正好齐平
     -- （早先按 +2 算，轨道比圆高出各 1 px —— 用户看到的"条上下多露出 1px"）
-    local crv     = math.max(3, math.floor(3.6 * s + 0.5)) + 1
+    -- r57：环径改由**环心距**派生，不再跟 s 走。
+    -- s = bm.scale * tl_scale，只随窗口物理高变化；环心距只随 display-hidpi-scale 变化。
+    -- 两条不同源的曲线相减才是横轴（两环之间那段），于是「高分辨率 + 100% DPI」下会算成负数
+    -- （2560x1600@100% -> -2 px，3840x2160@100% -> -8 px）：两环叠死，横轴既点不中也拖不动。
+    -- Pr 的比例是 22 逻辑环心距 / 10 逻辑环径 => 取 45%，横轴恒约 12 逻辑 px。见 测量总账 §7.8。
+    local ring_d  = math.max(6, math.floor((TL.ov_min_px and TL.ov_min_px() or 22) * 0.45 + 0.5))
+    local crv     = math.max(3, math.floor(ring_d / 2 + 0.5))
     local ov_h    = math.max(6, math.floor(7 * s + 0.5), 2 * crv + 2)
     local lab_sz  = math.max(9, tc_sz - 2)
     local mh      = math.max(5, math.floor(7 * s + 0.5))
