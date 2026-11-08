@@ -3648,10 +3648,6 @@ local function tl_grab_move(g, mx)
         --   · 其它位置：缩 → 远端动、近端钉住；放 → 被抓那端动、另一端钉住
         --   · 收缩越过中点 → 以播放头为轴（切换点连续）
         local function tl_place(sp, grab)
-            -- r58（做法 D）：撞片头/片尾后**冻结宽度**。Pr 实测：撞边那一帧起宽度不再变，
-            -- 整段拖动余下的步数 L/R/W 全为 0（[128.5,567.5] 抓左环放大 60 步，第 10 步到 28.5 后 40 步全 0）。
-            -- 只钳输入、不钳输出：反向拖动时 sp 变小 ⇒ 自然放行，不需要单独解锁。
-            if gr.span_cap and sp > gr.span_cap then sp = gr.span_cap end
             local s2 = math.max(minspan, sp)
             local a, b
             if p0 == nil then
@@ -3663,22 +3659,21 @@ local function tl_grab_move(g, mx)
             else
                 if grab == 'left' then a, b = gr.t1 - s2, gr.t1 else a, b = gr.t0, gr.t0 + s2 end
             end
-            local hit
-            if a < 0 then b, a = b - a, 0; hit = 'head' end
-            if b > g.dur then a, b = a - (b - g.dur), g.dur; hit = 'tail' end
-            if a < 0 then a = 0; hit = 'both' end
-            if b > g.dur then b = g.dur; hit = 'both' end
+            if a < 0 then b, a = b - a, 0 end
+            if b > g.dur then a, b = a - (b - g.dur), g.dur end
+            if a < 0 then a = 0 end
+            if b > g.dur then b = g.dur end
             if p0 and math.abs(p0 - 0.5) > EPS and b - a > 1e-6 then
                 local crossed
                 if p0 < 0.5 then crossed = (tph - a) > 0.5 * (b - a) else crossed = (b - tph) > 0.5 * (b - a) end
                 if crossed then
                     local s3 = math.max(minspan, math.min(b - a, 2 * tph, 2 * (g.dur - tph)))
                     a, b = tph - s3 / 2, tph + s3 / 2
-                    if a < 0 then b, a = b - a, 0; hit = 'head' end
-                    if b > g.dur then a, b = a - (b - g.dur), g.dur; hit = 'tail' end
+                    if a < 0 then b, a = b - a, 0 end
+                    if b > g.dur then a, b = a - (b - g.dur), g.dur end
                 end
             end
-            return a, b, hit
+            return a, b
         end
         -- 播放头落在区间正中（|p0-0.5|<=EPS）：两圆以播放头为轴对称缩放（Pr 两阶段的第一段，
         -- mouse 手感也要保留；不这样做时抓右圆只会缩右边，播放头会被挤到边上）
@@ -3763,18 +3758,14 @@ local function tl_grab_move(g, mx)
                     if rend <= rmax + 1e-9 then
                         sp, lock = 2 * (rend - tph), nil
                     else
-                        -- r58：撞片尾后**宽度冻结**。Pr 实测：区间 [728.5,1167.5] 抓右环放大 60 步，
-                        -- 到 1267.5 后余下步数 L/R/W 全 0（整体锁死，不是另一端继续外扩）。
-                        sp = g.t1 - g.t0
+                        sp = rend                              -- 撞边：那一端钉死，右端继续按同一速度外扩
                     end
                 else
                     local lend = (gr.sym_l0 or (tph - hi / 2)) + d
                     if lend >= -1e-9 then
                         sp, lock = 2 * (tph - lend), nil
                     else
-                        -- r58：撞片头后宽度冻结，同右侧注释。以前是 sp = 2*tph - lend，
-                        -- 左端钉在 0、右端按同一速度继续外扩，宽度一直在涨。
-                        sp = g.t1 - g.t0
+                        sp = 2 * tph - lend
                     end
                 end
                 gr.edge_lock = lock
@@ -3871,9 +3862,7 @@ local function tl_grab_move(g, mx)
         elseif gr.kind == 'left' then
             local e = TL.bar_solve(g.dur, gr.t1, target, 'left')
             if inr and feel == 'pr' then
-                local q0, q1, hit = tl_place(span0 - (e - gr.t0), 'left')
-                n0, n1 = q0, q1
-                if hit then gr.span_cap = q1 - q0; gr.span_hit = hit end
+                n0, n1 = tl_place(span0 - (e - gr.t0), 'left')
             else
                 n0 = math.max(0, math.min(e, gr.t1 - minspan))
                 n1 = gr.t1
@@ -3882,9 +3871,7 @@ local function tl_grab_move(g, mx)
         elseif gr.kind == 'right' then
             local e = TL.bar_solve(g.dur, gr.t0, target, 'right')
             if inr and feel == 'pr' then
-                local q0, q1, hit = tl_place(span0 - (gr.t1 - e), 'right')
-                n0, n1 = q0, q1
-                if hit then gr.span_cap = q1 - q0; gr.span_hit = hit end
+                n0, n1 = tl_place(span0 - (gr.t1 - e), 'right')
             else
                 n1 = math.min(g.dur, math.max(e, gr.t0 + minspan))
                 n0 = gr.t0
@@ -3902,13 +3889,12 @@ local function tl_grab_move(g, mx)
         -- 取证：每帧一行，关键判定全带上（tl_dbg=log 走 mpv 日志 / file 追加到 home 下 txt）
         if dbg ~= 'off' then
             local s = string.format(
-                'tlgrab k=%s ke=%s tr=%s sym=%s sr=%s blk=%s inr=%s pn=%s mx=%.1f tg=%.4f te=%.4f l0=%s r0=%s mxo=%s pa=%s pb=%s n=%.3f,%.3f cap=%s hit=%s',
+                'tlgrab k=%s ke=%s tr=%s sym=%s sr=%s blk=%s inr=%s pn=%s mx=%.1f tg=%.4f te=%.4f l0=%s r0=%s mxo=%s pa=%s pb=%s n=%.3f,%.3f',
                 tostring(gr.kind), tostring(kind_eff), tostring(gr.trans), tostring(sym ~= nil), tostring(gr.sym_ready),
                 tostring(gr.sym_block), tostring(inr), pn and string.format('%.4f', pn) or 'nil', mx, target, target_eff,
                 gr.l0 and string.format('%.4f', gr.l0) or 'nil', gr.r0 and string.format('%.4f', gr.r0) or 'nil',
                 gr.mx_off and string.format('%.4f', gr.mx_off) or 'nil',
-                pa and string.format('%.3f', pa) or 'nil', pb and string.format('%.3f', pb) or 'nil', n0, n1,
-                gr.span_cap and string.format('%.3f', gr.span_cap) or 'nil', tostring(gr.span_hit))
+                pa and string.format('%.3f', pa) or 'nil', pb and string.format('%.3f', pb) or 'nil', n0, n1)
             if dbg == 'file' and TL.dbg_file then
                 TL.dbg_file:write(s .. '\n'); TL.dbg_file:flush()
             else
