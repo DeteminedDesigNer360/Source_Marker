@@ -3,7 +3,12 @@
 # 为什么要它：我用 gui_click / gui_drag / gui_type 直接操作真实鼠标键盘，你很可能正在
 # 用同一台机器做别的事。这个条子在任何操控开始前亮起、结束后消失，好让你知道现在别动手。
 #
-# 用法：
+# 用法（**推荐 -TextFile**：Start-Process 的 -ArgumentList 不给参数加引号，含空格的中文会被拆开）：
+#   Set-Content -LiteralPath C:\...\_tmp\ind.txt -Value "DSH 正在拖动 Pr 的缩放条" -Encoding UTF8
+#   Start-Process powershell -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-File",
+#     "C:\...\tools\control-indicator.ps1","-TextFile","C:\...\_tmp\ind.txt","-Seconds","60"
+#
+# 直接在当前 shell 里跑（参数由 shell 传，不会被拆）时 -Text 仍可用：
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\control-indicator.ps1 -Text "DSH 正在拖动 Pr 的缩放条" -Seconds 30
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools\control-indicator.ps1 -Stop
 #
@@ -16,6 +21,7 @@
 [CmdletBinding()]
 param(
     [string]$Text = 'DSH 正在操控鼠标/键盘',
+    [string]$TextFile = '',      # 从 UTF-8 文件读第一行当文字（避开命令行引号问题，见文件头注释）
     [int]$Seconds = 20,
     [switch]$Stop,
     [int]$X = 12,
@@ -23,6 +29,16 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# -TextFile 优先：Start-Process 的 -ArgumentList 是数组，每项用空格拼成命令行、**不加引号**，
+# 所以 '-Text','DSH 正在拖动 Pr 的缩放环' 到子进程会变成 `-Text DSH 正在拖动 ...`，
+# 后面几个词被当成位置参数塞进 $Seconds（Int32）⇒ 报「无法将值 xxx 转换为 Int32」并直接退出，
+# 指示条根本不出现（2026-11-08 用户报「Indicator没有正确显示」的真因）。
+# 传含空格的中文时改用这个参数。
+if ($TextFile -ne '' -and (Test-Path -LiteralPath $TextFile)) {
+    $raw = Get-Content -LiteralPath $TextFile -Encoding UTF8 -TotalCount 1
+    if ($raw) { $Text = $raw.Trim() }
+}
 $workspace = Split-Path -Parent $PSScriptRoot
 $pidFile = Join-Path $workspace '_tmp\control-indicator.pid'
 
