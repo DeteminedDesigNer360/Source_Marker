@@ -3864,8 +3864,18 @@ local function tl_grab_move(g, mx)
             if pb then
                 local at_end = (gr.kind == 'right' and pb >= g.dur - 1e-9)
                     or (gr.kind == 'left' and pa and pa <= 1e-9)
+                -- 「往外推」必须分方向：抓右端是鼠标继续右移，抓左端是继续左移。
+                -- 只判「比上一帧大」的话，抓左端永远取消不了（用户 2026-11-08 报：向左顶到头不取消，
+                -- 要改成向右移才取消）；反过来全片抓左端想缩小时，第一帧贴上 pa=0 就被当成外推，
+                -- 第二帧立刻放下 ⇒ 「全片下拖左环右移完全无法移动」。
+                local outward
+                if gr.kind == 'right' then
+                    outward = target > (gr.edge_tg or target) + 1e-6
+                else
+                    outward = target < (gr.edge_tg or target) - 1e-6
+                end
                 if at_end then
-                    if gr.edge_pin and target > (gr.edge_tg or target) + 1e-6 then edge_out = true end
+                    if gr.edge_pin and outward then edge_out = true end
                     gr.edge_pin, gr.edge_tg = true, target
                 else
                     gr.edge_pin, gr.edge_tg = nil, nil
