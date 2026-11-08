@@ -42,17 +42,21 @@ if ($TextFile -ne '' -and (Test-Path -LiteralPath $TextFile)) {
 $workspace = Split-Path -Parent $PSScriptRoot
 $pidFile = Join-Path $workspace '_tmp\control-indicator.pid'
 
+# 停旧实例**只认 PID 文件**，不做全盘扫描。
+# 2026-11-08 两次踩坑：
+#   ① 只排除 $PID ⇒ 同一条命令里 -Stop 会把调用方（命令行里也含 control-indicator.ps1）杀掉，
+#      调用方退出码 4294967295（-1）、后续命令全不执行；
+#   ② 补了祖先链排除仍然被中断 —— 因为 `cmd /c start` 启动的新实例，父进程是 cmd（已退出），
+#      它的祖先链**接不到调用方**，于是新实例清理「旧实例」时照样杀掉调用方。
+# 按命令行文本判断不可靠（调用方的命令行里必然也带着脚本名），所以只按 PID 文件精确处理；
+# 孤儿实例由 -Seconds 自动关闭兜底。
 function Stop-Indicator {
     if (Test-Path $pidFile) {
         $old = Get-Content $pidFile -ErrorAction SilentlyContinue
         if ($old) { Stop-Process -Id ([int]$old) -Force -ErrorAction SilentlyContinue }
         Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
     }
-    Get-CimInstance Win32_Process -Filter "Name='powershell.exe' or Name='pwsh.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -like '*control-indicator.ps1*' -and $_.ProcessId -ne $PID } |
-        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
-
 if ($Stop) { Stop-Indicator; return }
 
 Stop-Indicator
