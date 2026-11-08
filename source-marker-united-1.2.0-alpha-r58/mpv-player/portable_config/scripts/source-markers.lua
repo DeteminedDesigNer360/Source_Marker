@@ -3619,6 +3619,9 @@ local function tl_grab_move(g, mx)
     local minspan = tl_min_span()
     local n0, n1 = gr.t0, gr.t1
     local pn                                   -- p = 播放头在当前区间里的位置（只有 bar 模式算）
+    -- 被抓那端已经贴住它那一侧的轨道端点、鼠标还在继续往轨道外推 ⇒ 本次拖动到此为止。
+    -- 用户 2026-11-08 定的口径：「冻结」只允许以「取消激活」的形式存在，不许把区间按在原地。
+    local edge_out = false
     local target = 0                           -- 抓手的归一化位置（bar 模式解出来，日志也要用）
     local dbg = tostring(o.tl_dbg or 'off')     -- 'off' | 'log' | 'file'：取证用，每帧一行
     if (o.tl_ov_map or 'linear') == 'bar' and TL.bar_geom and TL.bar_solve then
@@ -3762,28 +3765,41 @@ local function tl_grab_move(g, mx)
                 -- 缺了它，抓左端向外的每一帧都在缩窄，到 wmin 就被钳死 ⇒ 最小档抓起左环
                 -- 往外拖「没有任何效果」（30 min 素材播放头 @5:00 实测：整趟拖动区间零变化）。
                 local sym_dir = (gr.kind == 'left') and -1 or 1
-                local w = (gr.sym_w0 or 0) + 2 * sym_dir * (target - (gr.sym_mx0 or target))
+                local want_w = (gr.sym_w0 or 0) + 2 * sym_dir * (target - (gr.sym_mx0 or target))
+                local w = want_w
                 local wmin, wmax = umin ^ pw, umax ^ pw
                 if w > wmax then w = wmax elseif w < wmin then w = wmin end
                 local u = (pw ~= 1) and (w ^ (1 / pw)) or w
                 local sp = u * g.dur
                 local mid = gr.sym_mid or tph
-                if mid - sp / 2 < -1e-9 or mid + sp / 2 > g.dur + 1e-9 then
-                    -- 撞到片头/片尾：整段停住（Pr 实测口径），沿用上一帧的跨度
-                    local pv = gr.sym_prev
-                    sym = pv and (pv[2] - pv[1]) or gr.sym_sp0
+                -- 「到顶」有两条路：解出的宽度先顶到 wmax（幂律下必然先发生 —— w 被钳住之后
+                -- 区间永远越不了界，只判越界的话这个分支是死代码，实测 0~600 之后就此不动），
+                -- 或者区间真的越界了。两种都算撞上限。
+                local at_top = want_w >= wmax - 1e-12
+                if at_top or mid - sp / 2 < -1e-9 or mid + sp / 2 > g.dur + 1e-9 then
+                    -- 撞到对称上限（= 一端贴住轨道端点）：**不是终点**，转回单动继续跟手。
+                    -- 以前这里是「沿用上一帧跨度」—— 同动只能居中放大，撞上去就等于到顶，
+                    -- 于是区间被按在原地（30 min 素材、播放头 @5:00，只能放大到 600 s，
+                    -- 想回全片必须双击横轴）。用户 2026-11-08 定的口径是：
+                    -- 撞上限 ⇒ 转单动（另一端继续往外扩）；只有「被抓那端自己贴边 + 继续外推」才取消激活。
+                    -- 本帧先不动区间（单动的 anchor 要用转模式那一刻的新像素，下一帧才准），只切模式。
+                    gr.sym_ready, gr.sym_prev = nil, nil
+                    gr.sym_block = true            -- 本次拖动不再进同动，直到松手
+                    -- 以转模式那一刻的像素当单动锚点（而不是抓起时的 l0/r0）。
+                    gr.l0, gr.r0 = TL.bar_geom(g.t0, g.t1, g.dur)
+                    -- 位置连续靠一个**常量偏移**，而且必须用**像素域**的端点位置：
+                    -- 单动解走的是条宽 w = u^p（u 是时间归一化），把「时间比」当 target_eff 是错的
+                    -- —— 拿 (mid + sp/2)/dur 当 target_eff 会解出 243 s 而不是 597 s（跨度砍到 41%）。
+                    -- 用 bar_geom 刚算出的 r0/l0 当 target_eff，与反解是同一套映射 ⇒ 切换帧同值。
+                    gr.mx_off = ((gr.kind == 'right') and gr.r0 or gr.l0) - target
+                    gr.mx_off_decay = false
+                    gr.sym_fall = true
+                    sym = nil
                 else
                     sym = sp
                 end
-                gr.sym_prev = { mid - sym / 2, mid + sym / 2 }
+                if sym then gr.sym_prev = { mid - sym / 2, mid + sym / 2 } end
             end
-        elseif gr.sym_block and not in_win then
-            -- 只有播放头**真正离开** p=0.5 的窗口才解锁。以前这里是无条件 else 分支，
-            -- 而 sym_block 为真时上面那个 if 必然为假 ⇒ 同一帧就进这里把锁清掉 ⇒
-            -- 下一帧又重进同动 → 触界 → 解锁 → 再进同动，区间卡在 "hi" 上永远出不来
-            -- （0~15@7.5 抓右圆放大、对称放大到片头触底后继续拖，都是这个死循环）。
-            gr.sym_ready, gr.sym_block = nil, nil
-            gr.sym_sp0, gr.sym_mx0, gr.sym_w0, gr.sym_c0, gr.sym_hi, gr.sym_mid, gr.sym_prev = nil, nil, nil, nil, nil, nil, nil
         end
         gr.sym = (sym ~= nil)
         if sym then gr.mx_off = nil end                   -- 回到对称：偏移只在单动段用，对称段按相对位移重算
@@ -3831,28 +3847,31 @@ local function tl_grab_move(g, mx)
             local eps_edge = g.dur * 1e-4
             local edge = (gr.t0 <= eps_edge) and 'head' or ((gr.t1 >= g.dur - eps_edge) and 'tail' or nil)
             pa, pb = TL.bar_solve_px(g.dur, anchor, target_eff, kind_eff, wmin, edge)
-            if pa and not (pb - pa >= minspan - 1e-9 and pa >= -1e-9 and pb <= g.dur + 1e-9) then
-                -- 时间越界：先看是**哪一端**出头，再按那一侧的贴边公式重解
-                --   左端出头 ⇒ t0=0，宽度 = 右端的归一化位置（抓右端时右端跟手，否则用抓起时的锚 r0）
-                --   右端出头 ⇒ t1=dur，宽度 = 1 - 左端的归一化位置（抓左端时左端跟手，否则用锚 l0）
-                local w
-                if pa < -1e-9 then
-                    w = (kind_eff == 'right') and target_eff or anchor
-                    if w and w > 0 and w <= 1 then
-                        local span = math.max(minspan, math.min(g.dur, w * g.dur))
-                        pa, pb = 0, span
-                    else pa = nil end
-                elseif pb > g.dur + 1e-9 then
-                    local lpos = (kind_eff == 'left') and target_eff or anchor
-                    w = 1 - lpos
-                    if w and w > 0 and w <= 1 then
-                        local span = math.max(minspan, math.min(g.dur, w * g.dur))
-                        pa, pb = g.dur - span, g.dur
-                    else pa = nil end
-                else
-                    pa = nil
-                end
+            -- 越界不再重解成贴边宽度：以前这里用抓起那一刻的 anchor 快照算跨度，
+            -- 于是一碰到片头/片尾就冻在那个值上（1 h 素材实测左端倒退 703 s、之后鼠标怎么动都不变）。
+            -- 现在原样交给 downstream 的 max(0,·)/min(dur,·) 钳制 —— 贴边后另一端继续跟手。
+            -- 只剩「跨度不足最小跨度」这一种情况退回老分支。
+            if pa and not (pb - pa >= minspan - 1e-9) then pa = nil end
+            -- 触边取消：**被抓的那一端自己**贴住它那一侧的轨道端点，鼠标还在继续往轨道外推
+            -- ⇒ 这次拖动到此为止（放下环），而不是把区间按在原地。
+            -- 判据必须用「被抓端」而不是「任一端」：同动撞上限时贴边的是另一端，
+            -- 那种情况走上面的「转单动」，不能取消。
+            if pb then
+                if gr.kind == 'right' and pb >= g.dur - 1e-9 and target > 1 + 1e-9 then edge_out = true end
+                if gr.kind == 'left' and pa and pa <= 1e-9 and target < -1e-9 then edge_out = true end
             end
+        end
+        if gr.sym_fall then
+            -- 刚撞到对称上限、切成单动：本帧保持不动（单动的 anchor 要用转模式那一刻的像素，
+            -- 下一帧才准），只把方向和 pn 交给下一帧。
+            gr.sym_fall = nil
+            gr.mx_prev, gr.pn_prev = mx, pn
+            return
+        end
+        if edge_out then
+            gr.mx_prev, gr.pn_prev = mx, pn
+            TL.drop('触边外拖')
+            return
         end
         if sym then
             -- 同动只有一个落位：以**时间中心** gr.sym_mid 对称（P13 修正，2026-11-08）。
