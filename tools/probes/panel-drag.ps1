@@ -1,5 +1,5 @@
 ﻿param(
-    [string]$Pkg = 'C:\Users\Frisk\Documents\Source_Marker_United\source-marker-united-1.2.0-alpha-r57',
+    [string]$Pkg = 'C:\Users\Frisk\Documents\Source_Marker_United\source-marker-united-1.2.0-alpha-r58',
     [string]$Media = 'C:\Users\Frisk\Documents\Source_Marker_United\reference\标尺素材-30s-30fps.mp4',
     [string]$Geom = '1280x720+40+60',
     [string]$Keys = '',

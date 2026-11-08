@@ -1,13 +1,13 @@
 # Source Marker 工作区
 
 这是 **Source Marker 的开发工作区**，不是发行版本身。
-发行版在 `source-marker-united-1.2.0-alpha-r57/`，它的内容与 GitHub 上 `main` 分支一一对应。
+发行版在 `source-marker-united-1.2.0-alpha-r58/`，它的内容与 GitHub 上 `main` 分支一一对应。
 
 ## 目录
 
 | 路径 | 是什么 |
 |---|---|
-| `source-marker-united-1.2.0-alpha-r57/` | **发行包**（Pr 面板 + mpv 播放器 + 许可与文档）。双击包里的 `安装.cmd` 安装。 |
+| `source-marker-united-1.2.0-alpha-r58/` | **发行包**（Pr 面板 + mpv 播放器 + 许可与文档）。双击包里的 `安装.cmd` 安装。 |
 | `docs/` | **文档区**：设计与测量文档（见下导航）、标记格式 Schema 与契约样例、面板截图。 |
 | `tools/` | 开发与验证工具：锚点解析、BOM 检查、契约与漂移回归、来源取证、离线测试套件。 |
 | `tools/probes/` | **回归探针库**（12 个，见 `可用工具.md` §十四）：拖圆锁死 / 越界 / 双击 / 最小跨度 / Pr 概览条扫描。 |
@@ -24,8 +24,8 @@
 |---|---|
 | 看**还剩什么没做**、目标与验收 | `新功能开发目标1.2.0『交织』.md` |
 | 接手开发 / 看**每轮到哪一步** | `docs/交接-1.2.0-进度.md` |
-| **上机验**当前构建 | `source-marker-united-1.2.0-alpha-r57/上机测试清单-1.2.0.md`（最新是步骤 11） |
-| 查某处**为什么这么改** | `source-marker-united-1.2.0-alpha-r57/改动说明.md` |
+| **上机验**当前构建 | `source-marker-united-1.2.0-alpha-r58/上机测试清单-1.2.0.md`（最新是步骤 11） |
+| 查某处**为什么这么改** | `source-marker-united-1.2.0-alpha-r58/改动说明.md` |
 | **Pr 概览条的数学 + mpv 实现 + 复盘**（本项目最硬的一份） | `docs/测量-Pr控制条数学与mpv实现.md` |
 | 第 9 条（时间轴/面板）**设计定稿** | `docs/设计-第9条-时间轴与面板.md`（§十三 是 r47 定稿） |
 | 第 8 条（OSD 控制栏）设计与实测 | `docs/设计-第8条-Pr风格OSD栏.md` |
