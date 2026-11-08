@@ -23,6 +23,13 @@ local S = {
     ['4b'] = { t0 = 20, t1 = 21.6683, ph = 3000, kind = 'left',  u0 = 0.00521, abs = true, xa = 117, dx = -8, n = 24 },
     -- 从最窄档一路放大到全片，并把鼠标拖出条外 111 px（C 组 :564 的「拖到顶」）
     ['9'] = { t0 = 1000, t1 = 1001.6683, ph = 3000, kind = 'right', u0 = 0.27109, abs = true, xa = 398, dx = 8, n = 110 },
+    -- 用户报的疑似遗留 bug：30 s 素材、可见范围 0~10（贴片头）、播放头 20 s，抓右环放大到撞片尾
+    ['10'] = { t0 = 0, t1 = 10, ph = 20, kind = 'right', u0 = 0.28645, abs = true, xa = 414, dx = 10, n = 80 },
+    -- 30 s 素材扫多种初始可见范围（播放头 20 s），找用户报的「撞片尾瞬间左环瞬移」
+    ['11'] = { t0 = 15, t1 = 25, ph = 20, kind = 'right', u0 = 0.82161, abs = true, xa = 979, dx = 10, n = 60 },
+    ['12'] = { t0 = 17, t1 = 21, ph = 20, kind = 'right', u0 = 0.68879, abs = true, xa = 839, dx = 10, n = 60 },
+    ['13'] = { t0 = 5, t1 = 6.6683, ph = 20, kind = 'right', u0 = 0.20755, abs = true, xa = 331, dx = 10, n = 90 },
+    ['14'] = { t0 = 25, t1 = 30, ph = 20, kind = 'right', u0 = 1.0, abs = true, xa = 1167, dx = 10, n = 40 },
 }
 local sc = S[o.scene]
 if not sc then mp.msg.error('tl-cgroup: unknown scene ' .. tostring(o.scene)) return end
