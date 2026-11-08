@@ -43,7 +43,7 @@ local S = {
     -- P10 侦察：非贴边的中间区间（1000~1600）抓右端放大到撞片尾
     ['21'] = { t0 = 1000, t1 = 1600, ph = 3000, kind = 'right', u0 = 0.6051, abs = true, xa = 750, dx = 8, n = 60 },
     -- 用户 2026-11-08 报：30 min 素材、播放头 5:00、最窄档，抓左环向左（同动段方向）
-    ['22'] = { t0 = 299.333, t1 = 300.667, ph = 300, kind = 'left', u0 = 0.4903, abs = true, xa = 629, dx = -8, n = 70 },
+    ['22'] = { t0 = 299.333, t1 = 300.667, ph = 300, kind = 'left', u0 = 0.1629, abs = true, xa = 284, dx = -8, n = 40 },
     -- 对照：同一起点抓右环向右（应放大到左端贴片头后停住）
     ['23'] = { t0 = 299.333, t1 = 300.667, ph = 300, kind = 'right', u0 = 0.5097, abs = true, xa = 650, dx = 8, n = 90 },
     -- 判别实验：l0 较大（0.3435）时鼠标出轨道之后端点还没到片尾，取消应当延后
@@ -54,6 +54,10 @@ local S = {
     ['26'] = { t0 = 0, t1 = 3610.023, ph = 900, kind = 'left', u0 = 0.0, abs = true, xa = 112, dx = 8, n = 30 },
     -- P10 侦察：贴片头抓右端缩小（不该冻）
     ['20'] = { t0 = 0, t1 = 1000, ph = 3000, kind = 'right', u0 = 0.277, abs = true, xa = 404, dx = -8, n = 20 },
+    -- P17 侦察：30 min 素材、播放头 5 min、只抓右环不松手，四段往复
+    -- 全长 → 最小 → 接近全长 → 最小；用户报第三次「单动切同动」时可见范围跳变
+    ['27'] = { t0 = 0, t1 = 1800, ph = 300, kind = 'right', u0 = 1.0, abs = true, xa = 1167,
+               phases = { { dx = -8, n = 90 }, { dx = 8, n = 75 }, { dx = -8, n = 95 } } },
 }
 local sc = S[o.scene]
 if not sc then mp.msg.error('tl-cgroup: unknown scene ' .. tostring(o.scene)) return end
@@ -67,24 +71,28 @@ local function run()
         mp.commandv('script-message', 'tl-dbg-mark',
             string.format('SCENE %s t0=%.4f t1=%.4f ph=%.4f kind=%s', o.scene, sc.t0, sc.t1, sc.ph, sc.kind))
         mp.commandv('script-message', 'tl-grab', sc.kind, string.format('%.5f', sc.u0))
-        local i = 0
+        -- phases 里每段自己的 dx 与步数，用来模拟「同一次抓取内多次改变方向」
+        local phases = sc.phases or { { dx = sc.dx, n = sc.n } }
+        local pi, used = 1, 0
         local u = sc.u0
         local x = sc.xa
         local function nxt()
-            i = i + 1
-            if i > sc.n then
+            local ph = phases[pi]
+            if not ph then
                 mp.commandv('script-message', 'tl-dbg-mark', 'SCENE END')
                 mp.commandv('script-message', 'tl-drop')
                 mp.add_timeout(0.40, function() mp.commandv('quit') end)
                 return
             end
             if sc.abs then
-                x = x + sc.dx
+                x = x + ph.dx
                 mp.commandv('script-message', 'tl-drag', string.format('%.1f', x))
             else
-                u = u + sc.du
+                u = u + (ph.du or sc.du)
                 mp.commandv('script-message', 'tl-drag-n', string.format('%.5f', math.max(0, math.min(1, u))))
             end
+            used = used + 1
+            if used >= ph.n then pi, used = pi + 1, 0 end
             mp.add_timeout(0.12, nxt)
         end
         mp.add_timeout(0.35, nxt)

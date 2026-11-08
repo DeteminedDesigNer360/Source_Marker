@@ -102,6 +102,7 @@ local o = {
     tl_dbg = 'off',            -- 第 9 条：拖圆取证输出 off | log（mpv 日志）| file（~~/source-markers-dbg.log，每帧一行）
     tl_ov_edge = 'pin',        -- 第 9 条：概览条贴片头/片尾时的映射 pin = 那一端钉死在 0/1（默认，跨过贴边瞬间会跳 6~21 px）| pr = 连续口径（不跳，但贴边那端会漂几 px）
     tl_play_follow = 'pr',     -- 第 9 条：播放跟随 off | pr（播放中不动、暂停追平居中，默认）| page（播到区间尾翻页）| center（始终居中）
+    tl_edge_tol = 6,           -- 第 9 条：抓着的环顶住轨道端点之后，鼠标还得沿外推方向再走这么多**像素**才放下（0 = 贴住后下一帧就放）
 tl_grab_feel = 'mouse',    -- 第 9 条：拖圆缩放手感 mouse（抓哪端动哪端、另一端钉死，默认）| pr（两阶段：缩=远端动、放=被抓端动；跨度缩到 2×(播放头−近端) 以下会改成以播放头对称 ⇒ 钉住端漂移，用户上机否决）
 }
 opts.read_options(o, 'source-markers')
@@ -3852,58 +3853,13 @@ local function tl_grab_move(g, mx)
             -- 现在原样交给 downstream 的 max(0,·)/min(dur,·) 钳制 —— 贴边后另一端继续跟手。
             -- 只剩「跨度不足最小跨度」这一种情况退回老分支。
             if pa and not (pb - pa >= minspan - 1e-9) then pa = nil end
-            -- 触边取消：**被抓的那一端自己**顶住它那一侧的轨道端点之后，鼠标再往外推，
-            -- 才结束这次拖动（放下环）。判据必须用「被抓端」而不是「任一端」——
-            -- 同动撞上限时贴边的是另一端，那种情况走上面的「转单动」，不能取消。
-            --
-            -- 为什么要求「上一帧就已经贴住」（gr.edge_pin）：端点越过片尾的那一帧，
-            -- 鼠标往往刚好也越过轨道右端（两端由同一个中心式同步移动），只判同一帧的话
-            -- 就成了「鼠标一移出轨道就取消」，而不是「顶到端点之后再推才取消」。
-            -- 实测判别：区间 2000~3400（l0=0.3435）抓右端，鼠标只越界 2 px、pb 才 3621.3（超出片尾 11 s）
-            -- 就取消了；改成「贴住之后再推」会多走一帧，落位先停在片尾，手感才对得上。
-            if pb then
-                local at_end = (gr.kind == 'right' and pb >= g.dur - 1e-9)
-                    or (gr.kind == 'left' and pa and pa <= 1e-9)
-                -- 「往外推」必须分方向：抓右端是鼠标继续右移，抓左端是继续左移。
-                -- 只判「比上一帧大」的话，抓左端永远取消不了（用户 2026-11-08 报：向左顶到头不取消，
-                -- 要改成向右移才取消）；反过来全片抓左端想缩小时，第一帧贴上 pa=0 就被当成外推，
-                -- 第二帧立刻放下 ⇒ 「全片下拖左环右移完全无法移动」。
-                local outward
-                if gr.kind == 'right' then
-                    outward = target > (gr.edge_tg or target) + 1e-6
-                else
-                    outward = target < (gr.edge_tg or target) - 1e-6
-                end
-                if at_end then
-                    if gr.edge_pin and outward then edge_out = true end
-                    gr.edge_pin, gr.edge_tg = true, target
-                else
-                    gr.edge_pin, gr.edge_tg = nil, nil
-                end
-            end
+            -- 触边取消见下方「实际落位」处（2026-11-08 重做：不能用 pa/pb，见那里的注释）
         end
         if gr.sym_fall then
             -- 刚撞到对称上限、切成单动：本帧保持不动（单动的 anchor 要用转模式那一刻的像素，
             -- 下一帧才准），只把方向和 pn 交给下一帧。
             gr.sym_fall = nil
             gr.mx_prev, gr.pn_prev = mx, pn
-            return
-        end
-        if edge_out then
-            -- 取证：取消那一帧把鼠标位置与端点位置都打出来（返回到上面之前，正常帧的日志不会走到这里）
-            if dbg ~= 'off' then
-                local s = string.format('tlgrab EDGE_OUT k=%s mx=%.1f tg=%.4f pa=%s pb=%s rw=%.1f dur=%.3f',
-                    tostring(gr.kind), mx, target,
-                    pa and string.format('%.3f', pa) or 'nil', pb and string.format('%.3f', pb) or 'nil',
-                    g.rw or 0, g.dur or 0)
-                if dbg == 'file' and TL.dbg_file then
-                    TL.dbg_file:write(s .. '\n'); TL.dbg_file:flush()
-                else
-                    mp.msg.info(s)
-                end
-            end
-            gr.mx_prev, gr.pn_prev = mx, pn
-            TL.drop('触边外拖')
             return
         end
         if sym then
@@ -3940,6 +3896,46 @@ local function tl_grab_move(g, mx)
             n0, n1 = mid - half, mid + half
             if n0 < 0 then n1, n0 = n1 - n0, 0 end
             if n1 > g.dur then n0, n1 = n0 - (n1 - g.dur), g.dur end
+        end
+        -- 触边取消（2026-11-08 重做）：判据必须用**实际落位** n0/n1，不能用 bar_solve_px 解出的 pa/pb。
+        -- 同动段落位是 mid ± sym/2，pa/pb 只代表「若按单动解会落哪」：鼠标拖出条外时 target < 0，
+        -- w = anchor − target 反而变大 ⇒ pa 迅速变负，于是左端还剩 179 s 就被当成「顶到端点」并 TL.drop
+        -- （用户复测：鼠标 x=108 已出轨道左端，pa=-8.03，真实左端 179.74 s）。
+        -- 判据只用**被抓的那一端**：同动撞上限时贴边的是另一端，那种情况走「转单动」，不能取消。
+        local at_end = (gr.kind == 'right' and n1 >= g.dur - 1e-9)
+            or (gr.kind == 'left' and n0 <= 1e-9)
+        if at_end then
+            if gr.edge_pin then
+                -- 触边后整段冻结：鼠标继续外推不再改可见范围（与同动撞上限「整段停住」同构），
+                -- 否则触边那一帧还会因为反解换分支而回缩几秒（实测右端从 597.266 退回 592.111）。
+                n0, n1 = gr.edge_n0, gr.edge_n1
+                -- 容差按**位移**算，而不是「比上一帧更往外」：后者的容差恰好一帧，鼠标快拖时
+                -- 一帧 8~20 px 会直接跳过「顶住」这段手感（用户上机就是这个观感）。
+                local out_px = ((gr.kind == 'right') and (mx - (gr.edge_mx or mx)))
+                    or ((gr.edge_mx or mx) - mx)
+                if out_px >= (tonumber(o.tl_edge_tol) or 6) then edge_out = true end
+            else
+                gr.edge_pin, gr.edge_n0, gr.edge_n1, gr.edge_mx = true, n0, n1, mx
+            end
+        elseif gr.edge_pin then
+            gr.edge_pin, gr.edge_n0, gr.edge_n1, gr.edge_mx = nil, nil, nil, nil
+        end
+        if edge_out then
+            -- 取证：取消那一帧把鼠标位置与落位都打出来（正常帧的日志不会走到这里）
+            if dbg ~= 'off' then
+                local s = string.format('tlgrab EDGE_OUT k=%s mx=%.1f tg=%.4f pa=%s pb=%s n=%.3f,%.3f rw=%.1f dur=%.3f',
+                    tostring(gr.kind), mx, target,
+                    pa and string.format('%.3f', pa) or 'nil', pb and string.format('%.3f', pb) or 'nil',
+                    n0, n1, g.rw or 0, g.dur or 0)
+                if dbg == 'file' and TL.dbg_file then
+                    TL.dbg_file:write(s .. '\n'); TL.dbg_file:flush()
+                else
+                    mp.msg.info(s)
+                end
+            end
+            gr.mx_prev, gr.pn_prev = mx, pn
+            TL.drop('触边外拖')
+            return
         end
         -- 取证：每帧一行，关键判定全带上（tl_dbg=log 走 mpv 日志 / file 追加到 home 下 txt）
         if dbg ~= 'off' then
