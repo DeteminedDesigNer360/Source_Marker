@@ -3719,57 +3719,64 @@ local function tl_grab_move(g, mx)
         -- （0.02 窗口在 0~15 上只有 0.3 s），跨过去就再也回不来，用户看到的是"有概率进不去"。
         local crossed_half = pn ~= nil and gr.pn_prev ~= nil and ((gr.pn_prev - 0.5) * (pn - 0.5) <= 0)
         local in_win = pn ~= nil and (math.abs(pn - 0.5) <= lim or crossed_half)
-        if gr.kind ~= 'mid' and (in_win or gr.edge_lock) and not gr.sym_block and TL.bar_solve_center then
+        -- P13：同动段一旦进入就由 gr.sym_ready 保持，不再要求 pn 落回窗口。
+        -- 像素中心固定之后，区间中心 ≠ 播放头，pn 必然偏离 0.5 ⇒ 若还按 pn 判，第二帧就掉回单动。
+        if gr.kind ~= 'mid' and (in_win or gr.sym_ready) and not gr.sym_block and TL.bar_solve_center then
             local hi = math.min(2 * tph, 2 * (g.dur - tph))
+            -- 同动段：**像素中心固定 + 宽度线性**（P13，2026-11-08）。
+            -- Pr 实测口径：拖环时宽度变化恒 2 × 鼠标位移、两端 0.5/0.5 对称、像素中心不动
+            -- （q/w/v/u/x 五组零例外）。所以这里同时锁两件事：
+            --   ① 宽度每帧从起手基准线性推进：w = w0 + 2·(target − mx0)；
+            --   ② 中心的**像素位置** xc0 固定，不跟 k(u) 走 —— bar_geom 的 xc = 0.5+(c−0.5)k(u)，
+            --      若让 c 恒等于 tph/dur，u 一变 k 就变、中心就漂（实测右环 1:1 但左环只走一半，
+            --      总宽度变化 1.5× 鼠标而不是 Pr 的 2×）。
+            -- 旧实现按**时间**推（d = Δtarget·C·dur 秒）：固定时间增量换来的宽度变化是
+            -- p·u^(p−1)·Δu，u→0 时发散、u→1 时收缩，同一趟拖动里环速 6.92× 掉到 0.80×，
+            -- 就是用户报的「弹弓感」（P13 / P12）。
             if gr.sym_ready == nil then
-                -- 进入同动的**第一帧**：跨度取 min(当前跨度, hi)，然后以播放头居中。
-                -- 跳幅 = max(0, 跨度 − hi)，只在「跨度已经超过对称上限」时非零：
-                --   · 跨过 pn=0.5 触发（crossed_half）：此时 pn≥0.5 ⇒ 跨度≤2(tph−t0)≤hi ⇒ 跳幅恒为 0；
-                --   · 落进 |pn−0.5|<=EPS 窗口触发：跨度≈hi/(2pn)，跳幅≈2·EPS·hi（P2① 实测 EPS=0.02 时
-                --     0~30@10 抓左圆跳 0.791 s，占跨度 3.8%）。EPS 已收窄到 0.002 ⇒ 跳幅 ≤0.4% 跨度。
-                -- 以前这里要求 sp_cur < hi 才进，跨过 0.5 的那一帧就把 sym_ready 设成 false，
-                -- 之后再也不重试 ⇒ 用户看到“有概率不进入双动”（0~15@4 抓右圆几乎必现）。
                 local sp_cur = math.min(g.t1 - g.t0, hi)
                 if sp_cur >= minspan - 1e-9 then
+                    local u0 = sp_cur / g.dur
+                    local pw0 = TL.bar_pow(g.dur)
                     gr.sym_ready = true
-                    gr.sym_sp0, gr.sym_mx0, gr.edge_lock = sp_cur, target, nil
-                    gr.sym_l0, gr.sym_r0 = tph - sp_cur / 2, tph + sp_cur / 2
+                    gr.sym_sp0, gr.sym_mx0 = sp_cur, target
+                    gr.sym_w0 = u0 ^ pw0
+                    gr.sym_xc0 = 0.5 + (tph / g.dur - 0.5) * TL.bar_k(u0, g.dur)
+                    gr.sym_mid = tph
+                    gr.sym_prev = { tph - sp_cur / 2, tph + sp_cur / 2 }
                     sym = sp_cur
                 else
                     -- 保留 nil 让它下一帧继续重试；这里不能动 l0/r0，否则单动拖动会把锚点带着走
                     gr.sym_ready = nil
                 end
             elseif gr.sym_ready then
-                -- 相对缩放：跨度按**鼠标位移**线性变化（不用"鼠标绝对位置 → 跨度"的幂律，小跨度时太敏感；
-                -- 也不用等比——等比缩到最小后步进太小、回到大跨度时又太猛，用户实测"拉弹弓感太强"）。
-                -- 基准固定为进入同动那一刻的跨度与鼠标位置，每帧从基准重算（逐帧累加会被 clamp 带偏）。
-                -- C=0.6：**被拖动那一端**每走 1 个条宽位移，时间上走 0.6 个片长。
-                -- 用"端点位置"而不是"跨度"做连续量，撞边前后速度才一致：
-                -- 对称段右端 = tph + sp/2（两端各走一半），撞边段右端 = sp（只有一端走）。
-                -- 以前按跨度算，撞边瞬间右端速度从 0.6 突变成 1.2（翻倍），用户看到"突然加速超过鼠标"。
-                local C = 0.6
-                local m0 = gr.sym_mx0 or target
-                local d = (target - m0) * C * g.dur
-                local lock = (2 * tph <= 2 * (g.dur - tph)) and 'head' or 'tail'
-                local rmax = tph + hi / 2                     -- 对称能到的最大右端（再大就得撞边）
-                local sp
-                if gr.kind == 'right' then
-                    local rend = (gr.sym_r0 or rmax) + d
-                    if rend <= rmax + 1e-9 then
-                        sp, lock = 2 * (rend - tph), nil
+                local pw = TL.bar_pow(g.dur)
+                local umin = math.max(minspan / g.dur, 1e-9)
+                local umax = math.max(umin, math.min(1, hi / g.dur))
+                local w = (gr.sym_w0 or 0) + 2 * (target - (gr.sym_mx0 or target))
+                local wmin, wmax = umin ^ pw, umax ^ pw
+                if w > wmax then w = wmax elseif w < wmin then w = wmin end
+                local u = (pw ~= 1) and (w ^ (1 / pw)) or w
+                -- 由固定像素中心与宽度反解区间中心（与 bar_solve_px 的式子同源）
+                local kk = TL.bar_k(u, g.dur)
+                local c = 0.5 + ((gr.sym_xc0 or 0.5) - 0.5) / math.max(1e-6, kk)
+                c = math.max(0, math.min(1, c))
+                local sp = u * g.dur
+                local mid = c * g.dur
+                if mid - sp / 2 < -1e-9 or mid + sp / 2 > g.dur + 1e-9 then
+                    -- 撞到片头/片尾：整段停住（Pr 实测口径），沿用上一帧的位置
+                    local pv = gr.sym_prev
+                    if pv then
+                        gr.sym_mid = (pv[1] + pv[2]) / 2
+                        sym = pv[2] - pv[1]
                     else
-                        sp = rend                              -- 撞边：那一端钉死，右端继续按同一速度外扩
+                        sym = gr.sym_sp0
                     end
                 else
-                    local lend = (gr.sym_l0 or (tph - hi / 2)) + d
-                    if lend >= -1e-9 then
-                        sp, lock = 2 * (tph - lend), nil
-                    else
-                        sp = 2 * tph - lend
-                    end
+                    gr.sym_mid = mid
+                    sym = sp
                 end
-                gr.edge_lock = lock
-                sym = math.max(minspan, math.min(g.dur, sp))
+                gr.sym_prev = { gr.sym_mid - sym / 2, gr.sym_mid + sym / 2 }
             end
         elseif gr.sym_block and not in_win then
             -- 只有播放头**真正离开** p=0.5 的窗口才解锁。以前这里是无条件 else 分支，
@@ -3777,8 +3784,7 @@ local function tl_grab_move(g, mx)
             -- 下一帧又重进同动 → 触界 → 解锁 → 再进同动，区间卡在 "hi" 上永远出不来
             -- （0~15@7.5 抓右圆放大、对称放大到片头触底后继续拖，都是这个死循环）。
             gr.sym_ready, gr.sym_block = nil, nil
-            gr.sym_sp0, gr.sym_mx0, gr.edge_lock = nil, nil, nil
-            gr.sym_l0, gr.sym_r0 = nil, nil
+            gr.sym_sp0, gr.sym_mx0, gr.sym_w0, gr.sym_xc0, gr.sym_mid, gr.sym_prev = nil, nil, nil, nil, nil, nil
         end
         gr.sym = (sym ~= nil)
         if sym then gr.mx_off = nil end                   -- 回到对称：偏移只在单动段用，对称段按相对位移重算
@@ -3850,13 +3856,11 @@ local function tl_grab_move(g, mx)
             end
         end
         if sym then
-            if gr.edge_lock == 'head' then
-                n0, n1 = 0, math.min(g.dur, sym)
-            elseif gr.edge_lock == 'tail' then
-                n0, n1 = math.max(0, g.dur - sym), g.dur
-            else
-                n0, n1 = tph - sym / 2, tph + sym / 2
-            end
+            -- 同动只有一个落位：以**像素中心** gr.sym_mid 对称。
+            -- 不是 tph：bar_geom 的中心带 k(u)，宽度一变中心就漂，用 tph 会让左环只走一半（P13）。
+            -- 撞边时 gr.sym_mid/sym 都沿用上一帧 ⇒ 整段停住，不再平移贴边。
+            local mid = gr.sym_mid or tph
+            n0, n1 = mid - sym / 2, mid + sym / 2
         elseif pa then
             n0, n1 = math.max(0, pa), math.min(g.dur, pb)
         elseif gr.kind == 'left' then
