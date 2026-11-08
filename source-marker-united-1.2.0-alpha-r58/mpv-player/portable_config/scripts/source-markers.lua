@@ -3736,17 +3736,19 @@ local function tl_grab_move(g, mx)
             -- p·u^(p−1)·Δu，u→0 时发散、u→1 时收缩，同一趟拖动里环速 6.92× 掉到 0.80×，
             -- 就是用户报的「弹弓感」（P13 / P12）。
             if gr.sym_ready == nil then
-                -- 轴心 = **当前区间的实际中心**（不是播放头）：播放头在区间外时进同动也能定死一个正确的轴。
-                local c0 = (g.t0 + g.t1) / 2 / g.dur
-                local hi_eff = 2 * math.min(c0 * g.dur, g.dur - c0 * g.dur)
+                -- 轴心 = **播放头 tph**（不是当前区间中心）：区间中心取的是进入那一帧的快照，
+                -- 而「pn 恰好 0.5」只发生在两帧之间 ⇒ 快照永远错过冲，过冲量随鼠标速度变化
+                -- （实测慢拖偏 1.79 s、快拖偏 9.36 s，且每次拖动落点都不一样）。
+                -- 对齐 tph 把这笔过冲从「永久位置误差」换成「进入瞬间的一次平移」，之后锁死。
+                local hi_eff = 2 * math.min(tph, g.dur - tph)
                 local sp_cur = math.min(g.t1 - g.t0, hi_eff)
                 if sp_cur >= minspan - 1e-9 then
                     gr.sym_ready = true
                     gr.sym_sp0, gr.sym_mx0 = sp_cur, target
                     gr.sym_w0 = (sp_cur / g.dur) ^ TL.bar_pow(g.dur)
-                    gr.sym_c0, gr.sym_hi = c0, hi_eff
-                    gr.sym_mid = c0 * g.dur
-                    gr.sym_prev = { gr.sym_mid - sp_cur / 2, gr.sym_mid + sp_cur / 2 }
+                    gr.sym_c0, gr.sym_hi = tph / g.dur, hi_eff
+                    gr.sym_mid = tph
+                    gr.sym_prev = { tph - sp_cur / 2, tph + sp_cur / 2 }
                     sym = sp_cur
                 else
                     -- 保留 nil 让它下一帧继续重试；这里不能动 l0/r0，否则单动拖动会把锚点带着走

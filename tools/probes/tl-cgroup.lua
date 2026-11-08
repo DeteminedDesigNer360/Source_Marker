@@ -32,6 +32,8 @@ local S = {
     ['14'] = { t0 = 25, t1 = 30, ph = 20, kind = 'right', u0 = 1.0, abs = true, xa = 1167, dx = 10, n = 40 },
     -- P13 回归：30 min 素材、播放头 5 min、从全片抓右环一路缩小到最小档
     ['15'] = { t0 = 0, t1 = 1800, ph = 300, kind = 'right', u0 = 1.0, abs = true, xa = 1167, dx = -8, n = 90 },
+    -- 同一场景但鼠标是「快速挪动」（每步 40 px）：验证进入同动的时机是否影响最终中心
+    ['16'] = { t0 = 0, t1 = 1800, ph = 300, kind = 'right', u0 = 1.0, abs = true, xa = 1167, dx = -40, n = 20 },
 }
 local sc = S[o.scene]
 if not sc then mp.msg.error('tl-cgroup: unknown scene ' .. tostring(o.scene)) return end
